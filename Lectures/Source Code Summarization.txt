@@ -1,0 +1,42 @@
+Source Code Summarization -> representation in natural Language of what code is doing
+
+1) Define what type fo code are we talking about (es. class, method, 200 lines code, ecc.)
+
+2) We have to tokenize and make embeddings of the vector -> Train the model -> Measure the effectiveness of the model through metrics
+
+
+
+Pipeline: Data collection -> Source code modeling -> Code summarization generation -> Evaluation
+
+Data collection -> We don't do it for the project, we use specific dataset
+		-> Construct training/test datasets more clean as possible (we cannot assure that the code in dataset is accually correct for its purpose)
+		-> For the project we can use a subset of a dataset, beacause of its big dimension
+		-> For the project, at least we have to consider 1 programming language to analyze
+		-> For the project, we can choose the dataset that we want
+		-> For the project, we can use CodeXGLUE as dataset
+
+Source code modeling -> Token, Tree (Abstract Syntax Tree), Graph -> goal: extract semantic meaning of the code
+		-> Transforming code into vectors to represent code semantics
+		-> For the project, we are free to use tokenizers from LLMs (they use subwords tokenization)
+		-> Use of tokens -> simple but not very precise
+		-> use of AST -> import AST library in python, that has a method that returns a text representation of the AST and then we can tokenize the text. 
+				Otherwise, we can tokenize the  AST itself (AST linearization, maybe simpler way -> can be fed to RNN or Transformers)
+		-> tree-based: non linearization -> we didn't do it and can be difficult to do it
+		-> maybe be considered also the combination Tokenization + AST
+		-> For the project we can do which type of modeling we want, we can also do a comparison of multiple models
+
+Code summarization generation -> deep learning
+		-> template-based process -> there is NO TRAINING
+		-> DON'T JUST FINETUNE LLMs
+
+Quality evaluation -> manual vs automatic -> goal: assess accuracy, completeness and fluency of the summarization produced
+		-> automatic metrics -> we don't have to implement them but just use libraries that implement them
+		-> best is to combine both approaches
+		
+
+FOR THE PROJECT: VERY IMPORTANT IS TO KNOW WHAT OUR MODEL DOES AND BEING ABLE TO EXPLAIN EVERY DETAIL OF THE PORJECT
+
+
+
+
+
