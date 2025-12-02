@@ -1,0 +1,7 @@
+def pippo(radius):
+    """
+    """
+    if radius < 0:
+        raise ValueError("The radius cannot be negative.")
+    pi = 3.14159
+    return pi * (radius ** 2)
