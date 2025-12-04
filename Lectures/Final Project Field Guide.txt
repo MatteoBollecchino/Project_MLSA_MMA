@@ -1,0 +1,97 @@
+Final Project Field Guide (Tips for the Project)
+
+
+-> For the Project DO NOT JUST FINETUNE A PRE-TRAINED MODEL
+
+Check also the slides
+
+The professor will inference on our code (will pass a snippet of code to see if our model will give a good summarization of the snippet)
+Report -> justify all the choises taken for the project (which model we realized, ecc.)
+	-> the report should match the code
+	-> even if there are failures we can write about them in the report (we can write the professor for every need)
+
+TIP -> start with something simple and that works, then we can add complexity to the code. Stop when we are satisfied or we don't need to handle more stuff
+
+-> we can use Beam Search "Token predictor"
+
+-> In our project, we can use something that is not base on AST
+
+3 stages od DeepCom: Data Processing (AST -> SBT sequences) -> Training (rember of "teacher forcing" in case of Seq2Seq models) -> Inference (use of the trained model)
+
+We have to write in the report, or in the README, how he can do inference with our model
+
+SBT -> lossless and not ambiguous in the representation of the AST
+
+DEV TIPS 
+	-> start with few data to check if the pipeline actually works, then we can work on more data
+	-> we can automate entry points (train.py, evaluate.py, summarize.py)
+	-> think about realizing a configuration file, if we want to work on the model with different parameters
+	-> to test, make one change at a time
+	-> to debug, use small datasets -> create debug dataset to test the pipeline
+
+DATA HANDLING TIPS 
+	-> dataset is suggested to be non reprocessed	
+	-> use a limited number of tokens, in input and output
+	-> split by file -> keep the same dataset only in training or in testing (to prevent dataleakage) -> datapoints that belong to the same group should belong to the same dataset
+
+MODEL & TRAINING SANITY 
+	-> even realizing  single model is fine 
+	-> suggested parameters in the slides
+	-> monitor how the metrics update to understand how well the model is trained
+
+COLAB TIPS 
+	-> have checkpoints to save the state of the model (weights and biases), beacuse the GPU given by colab can be taken away after some time and we can loose the progression fo the 		model
+	-> in case we use colab see the slides
+	-> GPU only for training, for other things use CPU
+
+EVALUATION & INSPECTION 
+	-> prints any result in case of problems with dimensions
+	-> we can use command line support
+
+REPORTING PALYBOOK 
+	-> every information about the dataset used
+	-> if we use different parameters, or tokenizers, or other stuff to compare the results we have to talk about them
+	-> In case of failures, talk about them
+	-> Include information about HW, ecc.
+	-> GOLDEN RULE: only by the report, anyone could be able to replicate what we have done 
+	-> Track the "experiments" that we do
+	-> write about how the training goes (even including charts)
+
+COMMON MISTAKES:
+	-> Forgetting "model.eval()" during inference
+	-> Teacher Forcing mismatch (train WITH it, infer WITHOUT it)
+
+EXPERIMENTS:
+	-> Track the "experiments" that we do
+
+TIME MANAGEMENTS: 
+	-> Iterate fast
+	-> Set Milestones
+	-> Don't chase the State of the Art
+
+CODE ORGANIZATION:
+	-> modular
+	-> write about the requirements needed for replicability
+	-> README
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
