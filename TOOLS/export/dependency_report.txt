@@ -1,0 +1,19 @@
+Dependency Report - 2026-01-12 17:57:30
+==================================================
+
+--- Third-Party Libraries ---
+No third-party libraries found.
+
+
+--- Standard Library Imports ---
+json (imported 1 times)
+os (imported 1 times)
+
+
+--- Project-Internal Imports ---
+No project-internal imports found.
+
+
+==================================================
+--- Suggested requirements.txt ---
+# No third-party packages detected.

@@ -1,0 +1,231 @@
+================================================================================
+Code Snapshot for Project: Project
+Generated on: 2026-01-12 17:53:59
+================================================================================
+
+--- FILE: configs.txt | PATH: Project\configs.txt ---
+-----------------------------------------------------
+
+# Specifiche Tecniche: ML-Based Python Code Summarization
+
+metadata:
+  data: 12 Gennaio 2026
+  deadline: 
+    code_report: 16 Gennaio 2026
+    discussione: 23 Gennaio 2026
+  corso: Machine Learning for Software Analysis
+
+obiettivo_core:
+  descrizione: Sviluppare un tool basato su PyTorch che esegua la "code summarization".
+  input: Codice sorgente Python (es. funzioni, metodi).
+  output: Descrizione testuale (docstring/summary).
+
+vincoli_tecnici:
+  non_permesso:
+    - Utilizzo di Full Language Models pre-addestrati (es. BERT, GPT-2, CodeBERT, T5 caricati con pesi pre-esistenti).
+    - Utilizzo di modelli già addestrati specificamente su sintassi o semantica Python.
+    - Il modello core deve essere addestrato da zero (from scratch) sui dati scelti.
+  permesso:
+    - Utilizzo di Tokenizer pre-addestrati (es. Byte-Pair Encoding, WordPiece).
+    - Utilizzo di Matrici di Embedding pre-addestrate (es. GloVe, Word2Vec), purché non siano parte di un modello Transformer intero.
+    - Utilizzo di LLM (ChatGPT, Claude) per assistenza alla scrittura del codice o debugging (da documentare esplicitamente nel report).
+    - Adattamento di codice open-source (con attribuzione).
+
+architettura_richiesta:
+  framework: PyTorch
+  tipologia: Sequence-to-Sequence (Encoder-Decoder) o Transformer-based (Custom).
+  componenti:
+    - preprocessing: Tokenizzazione codice sorgente e riassunti.
+    - encoder: Processa la sequenza di codice.
+    - decoder: Genera la sequenza di testo (riassunto).
+    - training_loop: Implementazione standard (Forward pass, Loss calculation, Backward pass, Optimizer step).
+
+dati:
+  fonte: Dataset pubblici contenenti coppie (codice python, docstring/riassunto).
+  suggerimento: CodeSearchNet (o subset filtrati da GitHub/StackOverflow).
+  requisito: Il dataset deve essere sufficientemente ampio per permettere la convergenza del training, ma gestibile entro i tempi di calcolo disponibili.
+
+deliverables:
+  codebase:
+    linguaggio: Python/PyTorch
+    struttura_raccomandata:
+      - src/: Codice sorgente.
+      - data/: Script per il download/processing dati.
+      - models/: Definizioni delle classi PyTorch (Encoder, Decoder, Seq2Seq).
+      - scripts/: Script eseguibili.
+    scripts_funzionali:
+      - training: python train.py
+      - evaluation: python evaluate.py
+      - inference: python summarize.py --input "def func(): ..."
+  report:
+    formato: PDF, 5-6 Pagine
+    sezioni:
+      - Introduzione e Obiettivi.
+      - Metodologia: Descrizione dataset, preprocessing, architettura modello (giustificazione scelte).
+      - Risultati: Grafici loss (train/val), tabelle metriche.
+      - Discussione: Analisi errori, limitazioni.
+      - Appendice: Contributi membri gruppo, Riferimenti (incluso uso LLM).
+  readme:
+    contenuto: Istruzioni chiare per installare dipendenze, preparare dati e avviare training, valutazione, inferenza.
+
+metriche_valutazione:
+  - Cross-Entropy Loss (Durante il training/validation).
+  - BLEU Score (Metrica standard per traduzione automatica/generazione testo).
+  - ROUGE Score (Metrica per la qualità del riassunto).
+  - Perplexity (Opzionale ma raccomandata per modelli linguistici).
+
+roadmap_operativa:
+  - Day 1 (Oggi): Setup ambiente, scelta dataset (es. CodeSearchNet slice), pipeline di preprocessing funzionante (Text -> Tokens -> IDs).
+  - Day 2: Implementazione modello Seq2Seq semplice (LSTM o Transformer base). Primo run di training "dummy" per verificare che non crashi.
+  - Day 3: Training serio (overnight se necessario). Implementazione script di valutazione (BLEU/ROUGE).
+  - Day 4: Scrittura Report, cleanup codice, creazione README.
+
+
+================================================================================
+
+--- FILE: README.md | PATH: Project\data\README.md ---
+------------------------------------------------------
+
+# Cartella `data`
+
+Questa cartella conterrà tutti gli script e i file relativi alla gestione del dataset.
+
+## Implementazione Prevista
+
+1.  **Script di Acquisizione (`download_dataset.py`):**
+    *   Uno script per scaricare e scompattare il dataset (es. CodeSearchNet) nella cartella `Project/Datasets`.
+    *   Dovrebbe permettere di scaricare anche solo un subset per testare rapidamente la pipeline.
+
+2.  **Script di Preprocessing (`preprocess.py`):**
+    *   **Tokenizzazione:** Questo script si occuperà di convertire sia il codice sorgente che i riassunti testuali in sequenze di token. Verranno usati tokenizer specifici (es. BPE) per ogni "linguaggio" (codice e testo).
+    *   **Costruzione Vocabolario:** Creerà e salverà i vocabolari (mappe `token -> id`) per il codice e per i riassunti, includendo token speciali come `<PAD>`, `<SOS>`, `<EOS>`, `<UNK>`.
+
+3.  **Classe `Dataset` PyTorch (`dataset.py`):**
+    *   Implementerà una classe `torch.utils.data.Dataset` custom.
+    *   Questa classe leggerà i dati pre-processati, li convertirà in tensori numerici e li servirà al `DataLoader`.
+
+4.  **Funzione di Utilità per `DataLoader`:**
+    *   Una funzione helper che, data una classe `Dataset`, istanzi e restituisca i `DataLoader` per training, validazione e test.
+    *   Gestirà la logica per il padding dei batch (tramite l'argomento `collate_fn`) in modo che tutte le sequenze in un batch abbiano la stessa lunghezza.
+
+
+================================================================================
+
+--- FILE: README.md | PATH: Project\models\README.md ---
+--------------------------------------------------------
+
+# Cartella `models`
+
+Questa cartella conterrà le definizioni di tutti i moduli PyTorch che compongono l'architettura del modello di deep learning.
+
+L'architettura di partenza sarà un modello **Sequence-to-Sequence (Seq2Seq)** con RNN (LSTM o GRU).
+
+## Implementazione Prevista
+
+1.  **Encoder (`encoder.py`):**
+    *   **Classe `Encoder(torch.nn.Module)`:**
+    *   **Componenti:**
+        *   `torch.nn.Embedding`: Per convertire gli indici dei token del codice sorgente in vettori densi (embedding).
+        *   `torch.nn.LSTM` o `torch.nn.GRU`: Per processare la sequenza di embedding e produrre un "vettore di contesto" (l'ultimo stato nascosto dell'RNN).
+    *   **Input:** Sequenza di token del codice sorgente.
+    *   **Output:** Output dell'RNN e stati nascosti/cella (il vettore di contesto).
+
+2.  **Decoder (`decoder.py`):**
+    *   **Classe `Decoder(torch.nn.Module)`:**
+    *   **Componenti:**
+        *   `torch.nn.Embedding`: Per i token del riassunto.
+        *   `torch.nn.LSTM` o `torch.nn.GRU`: Per generare la sequenza di output token per token.
+        *   `torch.nn.Linear`: Uno strato lineare finale per mappare lo stato nascosto dell'RNN a una distribuzione di probabilità sul vocabolario dei riassunti.
+        *   `torch.nn.LogSoftmax`: Per ottenere le probabilità logaritmiche.
+    *   **Input:** Il vettore di contesto dall'encoder e il token precedente della sequenza generata.
+    *   **Output:** La predizione del token successivo nella sequenza.
+
+3.  **Modello Principale (`seq2seq.py`):**
+    *   **Classe `Seq2Seq(torch.nn.Module)`:**
+    *   **Componenti:**
+        *   Un'istanza dell'Encoder.
+        *   Un'istanza del Decoder.
+    *   **Logica:**
+        *   Orchestra il flusso dei dati: prende la sequenza di input, la passa all'encoder, usa il vettore di contesto per inizializzare il decoder.
+        *   Implementa il ciclo di generazione del decoder.
+        *   Gestisce il "teacher forcing": durante il training, decide se alimentare il decoder con il token predetto o con il token reale della sequenza target, per stabilizzare l'addestramento.
+
+
+================================================================================
+
+--- FILE: README.md | PATH: Project\scripts\README.md ---
+---------------------------------------------------------
+
+# Cartella `scripts`
+
+Questa cartella conterrà gli script eseguibili per lanciare le operazioni principali del progetto: addestramento, valutazione e inferenza.
+
+## Implementazione Prevista
+
+1.  **Script di Addestramento (`train.py`):**
+    *   **Responsabilità:** Gestire l'intero ciclo di vita dell'addestramento del modello.
+    *   **Logica:**
+        1.  Caricare i dati di training e validazione usando i `DataLoader` definiti in `data/`.
+        2.  Inizializzare il modello (es. `Seq2Seq`), l'ottimizzatore (es. `Adam`) e la funzione di loss (`NLLLoss` o `CrossEntropyLoss` con `ignore_index` per il padding).
+        3.  Eseguire il ciclo di training per un numero definito di `epoch`.
+        4.  Per ogni `epoch`:
+            *   Iterare sui batch di training, calcolare la loss, eseguire backpropagation e aggiornare i pesi.
+            *   Eseguire un ciclo di validazione per monitorare le performance su dati non visti.
+            *   Salvare i "checkpoint" del modello, specialmente quello con la migliore performance sul validation set.
+        5.  (Opzionale) Loggare le metriche (es. loss, perplessità) usando `TensorBoard` o tool simili.
+
+2.  **Script di Valutazione (`evaluate.py`):**
+    *   **Responsabilità:** Valutare quantitativamente un modello addestrato sul test set.
+    *   **Logica:**
+        1.  Caricare il `DataLoader` del test set.
+        2.  Caricare il modello migliore salvato dallo script di training.
+        3.  Iterare sul test set in modalità `torch.no_grad()`.
+        4.  Per ogni coppia (codice, riassunto reale), generare un riassunto predetto dal modello.
+        5.  Calcolare e riportare le metriche di valutazione richieste: **BLEU** e **ROUGE**.
+
+3.  **Script di Inferenza (`summarize.py`):**
+    *   **Responsabilità:** Usare il modello addestrato per generare un riassunto di un nuovo snippet di codice fornito dall'utente.
+    *   **Logica:**
+        1.  Accettare uno snippet di codice come argomento da linea di comando.
+        2.  Caricare il modello addestrato, i vocabolari e i tokenizer.
+        3.  Applicare lo stesso preprocessing dell'addestramento al codice di input.
+        4.  Eseguire il forward pass del modello (inferenza) per generare la sequenza di indici dei token del riassunto.
+        5.  Decodificare la sequenza di indici in una stringa di testo leggibile.
+        6.  Stampare a schermo il riassunto generato.
+
+
+================================================================================
+
+--- FILE: README.md | PATH: Project\src\README.md ---
+-----------------------------------------------------
+
+# Cartella `src`
+
+Questa cartella è pensata per contenere il codice sorgente riutilizzabile e le logiche di base che non rientrano specificamente nelle categorie `data`, `models` o `scripts`.
+
+Può essere vista come una libreria interna del progetto.
+
+## Implementazione Prevista
+
+Il contenuto di questa cartella emergerà durante lo sviluppo, ma potrebbe includere:
+
+1.  **Funzioni di Utilità (`utils.py`):**
+    *   Funzioni generiche che possono essere utili in più punti del progetto.
+    *   Esempi:
+        *   Funzioni per calcolare il tempo di esecuzione.
+        *   Funzioni per impostare il seed per la riproducibilità degli esperimenti (`set_seed`).
+        *   Classi per il logging custom.
+
+2.  **Gestione della Configurazione (`config.py`):**
+    *   Un modulo per caricare e gestire i parametri di configurazione del progetto (es. da file YAML o JSON).
+    *   Questo centralizza iperparametri come `learning_rate`, `batch_size`, `hidden_size`, percorsi dei file, ecc., rendendo gli esperimenti più facili da tracciare e modificare.
+
+3.  **Logica di Calcolo Metriche (`metrics.py`):**
+    *   Wrapper o implementazioni custom per le metriche di valutazione come BLEU e ROUGE, se la logica diventa complessa e si vuole disaccoppiarla dallo script `evaluate.py`.
+
+4.  **Componenti Condivisi del Modello:**
+    *   Se si sviluppano architetture più complesse (es. Transformer), qui si potrebbero definire i blocchi base riutilizzabili, come lo strato di `Multi-Head Attention` o `Position-wise Feed-Forward Network`, se non si vogliono tenere nei file principali dei modelli.
+
+
+================================================================================
+

@@ -1,0 +1,38 @@
+Project Tree for: c:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project
+============================================================================
+
+Project/
+├───configs.txt
+├───data/
+    ├───README.md
+├───dataset/
+    ├───preprocess.py
+    ├───go/
+        ├───test.txt
+        ├───valid.txt
+    ├───java/
+        ├───test.txt
+        ├───train.txt
+        ├───valid.txt
+    ├───javascript/
+        ├───test.txt
+        ├───train.txt
+        ├───valid.txt
+    ├───php/
+        ├───test.txt
+        ├───train.txt
+        ├───valid.txt
+    ├───python/
+        ├───test.txt
+        ├───train.txt
+        ├───valid.txt
+    ├───ruby/
+        ├───test.txt
+        ├───train.txt
+        ├───valid.txt
+├───models/
+    ├───README.md
+├───scripts/
+    ├───README.md
+├───src/
+    ├───README.md
