@@ -1,0 +1,73 @@
+# Specifiche Tecniche: ML-Based Python Code Summarization
+
+metadata:
+  data: 12 Gennaio 2026
+  deadline: 
+    code_report: 16 Gennaio 2026
+    discussione: 23 Gennaio 2026
+  corso: Machine Learning for Software Analysis
+
+obiettivo_core:
+  descrizione: Sviluppare un tool basato su PyTorch che esegua la "code summarization".
+  input: Codice sorgente Python (es. funzioni, metodi).
+  output: Descrizione testuale (docstring/summary).
+
+vincoli_tecnici:
+  non_permesso:
+    - Utilizzo di Full Language Models pre-addestrati (es. BERT, GPT-2, CodeBERT, T5 caricati con pesi pre-esistenti).
+    - Utilizzo di modelli già addestrati specificamente su sintassi o semantica Python.
+    - Il modello core deve essere addestrato da zero (from scratch) sui dati scelti.
+  permesso:
+    - Utilizzo di Tokenizer pre-addestrati (es. Byte-Pair Encoding, WordPiece).
+    - Utilizzo di Matrici di Embedding pre-addestrate (es. GloVe, Word2Vec), purché non siano parte di un modello Transformer intero.
+    - Utilizzo di LLM (ChatGPT, Claude) per assistenza alla scrittura del codice o debugging (da documentare esplicitamente nel report).
+    - Adattamento di codice open-source (con attribuzione).
+
+architettura_richiesta:
+  framework: PyTorch
+  tipologia: Sequence-to-Sequence (Encoder-Decoder) o Transformer-based (Custom).
+  componenti:
+    - preprocessing: Tokenizzazione codice sorgente e riassunti.
+    - encoder: Processa la sequenza di codice.
+    - decoder: Genera la sequenza di testo (riassunto).
+    - training_loop: Implementazione standard (Forward pass, Loss calculation, Backward pass, Optimizer step).
+
+dati:
+  fonte: Dataset pubblici contenenti coppie (codice python, docstring/riassunto).
+  suggerimento: CodeSearchNet (o subset filtrati da GitHub/StackOverflow).
+  requisito: Il dataset deve essere sufficientemente ampio per permettere la convergenza del training, ma gestibile entro i tempi di calcolo disponibili.
+
+deliverables:
+  codebase:
+    linguaggio: Python/PyTorch
+    struttura_raccomandata:
+      - src/: Codice sorgente.
+      - data/: Script per il download/processing dati.
+      - models/: Definizioni delle classi PyTorch (Encoder, Decoder, Seq2Seq).
+      - scripts/: Script eseguibili.
+    scripts_funzionali:
+      - training: python train.py
+      - evaluation: python evaluate.py
+      - inference: python summarize.py --input "def func(): ..."
+  report:
+    formato: PDF, 5-6 Pagine
+    sezioni:
+      - Introduzione e Obiettivi.
+      - Metodologia: Descrizione dataset, preprocessing, architettura modello (giustificazione scelte).
+      - Risultati: Grafici loss (train/val), tabelle metriche.
+      - Discussione: Analisi errori, limitazioni.
+      - Appendice: Contributi membri gruppo, Riferimenti (incluso uso LLM).
+  readme:
+    contenuto: Istruzioni chiare per installare dipendenze, preparare dati e avviare training, valutazione, inferenza.
+
+metriche_valutazione:
+  - Cross-Entropy Loss (Durante il training/validation).
+  - BLEU Score (Metrica standard per traduzione automatica/generazione testo).
+  - ROUGE Score (Metrica per la qualità del riassunto).
+  - Perplexity (Opzionale ma raccomandata per modelli linguistici).
+
+roadmap_operativa:
+  - Day 1 (Oggi): Setup ambiente, scelta dataset (es. CodeSearchNet slice), pipeline di preprocessing funzionante (Text -> Tokens -> IDs).
+  - Day 2: Implementazione modello Seq2Seq semplice (LSTM o Transformer base). Primo run di training "dummy" per verificare che non crashi.
+  - Day 3: Training serio (overnight se necessario). Implementazione script di valutazione (BLEU/ROUGE).
+  - Day 4: Scrittura Report, cleanup codice, creazione README.
