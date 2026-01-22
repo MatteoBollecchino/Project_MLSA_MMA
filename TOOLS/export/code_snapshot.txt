@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-19 18:12:47
+Generated on: 2026-01-22 11:02:04
 ================================================================================
 
 --- FILE: configs.txt | PATH: Project\configs.txt ---
@@ -120,6 +120,666 @@ Questa cartella conterrà tutti gli script e i file relativi alla gestione del d
 4.  **Funzione di Utilità per `DataLoader`:**
     *   Una funzione helper che, data una classe `Dataset`, istanzi e restituisca i `DataLoader` per training, validazione e test.
     *   Gestirà la logica per il padding dei batch (tramite l'argomento `collate_fn`) in modo che tutte le sequenze in un batch abbiano la stessa lunghezza.
+
+
+================================================================================
+
+--- FILE: dataset.py | PATH: Project\data\dataset.py ---
+--------------------------------------------------------
+
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
+import json
+import gzip
+import os
+import glob
+from tokenizers import Tokenizer
+
+class CodeSummaryDataset(Dataset):
+    def __init__(self, data_dir, split_type, tokenizer_path, max_len=128, subset=None):
+        """
+        data_dir: Cartella radice dei dataset (Project/Datasets)
+        split_type: 'train', 'valid' o 'test'
+        tokenizer_path: Percorso al file tokenizer.json
+        max_len: Lunghezza massima sequenze (Truncation)
+        subset: Numero massimo di campioni da caricare (opzionale, per test rapidi)
+        """
+        self.tokenizer = Tokenizer.from_file(tokenizer_path)
+        self.max_len = max_len
+        self.data = []
+
+        # 1. Ricerca Ricorsiva dei file .jsonl.gz (Pattern Recognition)
+        search_pattern = os.path.join(data_dir, "**", split_type, "*.jsonl.gz")
+        files = glob.glob(search_pattern, recursive=True)
+        
+        if not files:
+            raise FileNotFoundError(f"Nessun file trovato per lo split: {split_type} in {data_dir}")
+
+        # 2. Caricamento Dati con Gestione della Compressione
+        print(f"Caricamento split '{split_type}' da {len(files)} file...")
+        for file_path in files:
+            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                for line in f:
+                    item = json.loads(line)
+                    # Mapping flessibile dei campi (Robustness Principle)
+                    code = item.get('code', item.get('func_code_string', ''))
+                    doc = item.get('docstring', item.get('func_documentation_string', ''))
+                    
+                    if code and doc:
+                        self.data.append({'code': code, 'doc': doc})
+                    
+                    if subset and len(self.data) >= subset:
+                        break
+            if subset and len(self.data) >= subset:
+                break
+        
+        # Identificatori speciali dal Tokenizer
+        self.pad_id = self.tokenizer.token_to_id("<PAD>")
+        self.sos_id = self.tokenizer.token_to_id("<SOS>")
+        self.eos_id = self.tokenizer.token_to_id("<EOS>")
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        
+        # Tokenizzazione dinamica (JIT Processing)
+        # Codice (Source)
+        code_tokens = self.tokenizer.encode(item['code']).ids
+        code_ids = [self.sos_id] + code_tokens[:self.max_len-2] + [self.eos_id]
+        
+        # Sommario (Target)
+        doc_tokens = self.tokenizer.encode(item['doc']).ids
+        doc_ids = [self.sos_id] + doc_tokens[:self.max_len-2] + [self.eos_id]
+        
+        return torch.tensor(code_ids), torch.tensor(doc_ids)
+
+def collate_fn(batch, pad_id=0):
+    """
+    Gestisce il padding dinamico per ogni batch (Normalization of Variance)
+    """
+    code_seqs, doc_seqs = zip(*batch)
+    
+    # Padding: tutte le sequenze del batch avranno la lunghezza della più lunga nel batch
+    code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=pad_id)
+    doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=pad_id)
+    
+    return code_padded, doc_padded
+
+def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
+    dataset = CodeSummaryDataset(data_dir, split_type, tokenizer_path, subset=subset)
+    
+    # Passiamo il pad_id alla collate_fn tramite lambda
+    pad_id = dataset.pad_id
+    
+    return DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=shuffle, 
+        collate_fn=lambda b: collate_fn(b, pad_id)
+    )
+
+================================================================================
+
+--- FILE: download_dataset.py | PATH: Project\data\download_dataset.py ---
+--------------------------------------------------------------------------
+
+import os
+import requests
+import zipfile
+import io
+
+def download_codesearchnet_robust(output_dir="Project/Datasets"):
+    # Mirror su Hugging Face Assets - il più stabile al momento
+    url = "https://huggingface.co/datasets/code_search_net/resolve/main/data/python.zip"
+    
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    print(f"--- Tentativo di acquisizione via Hugging Face CDN ---")
+    print(f"URL: {url}")
+    print("Download in corso (circa 900MB). Prendi un caffè...")
+
+    try:
+        # User-agent per evitare blocchi bot
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, stream=True)
+        response.raise_for_status()
+
+        # Usiamo BytesIO per non scrivere il file zip intero su disco prima di estrarlo
+        with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
+            print("Download completato. Estrazione in corso...")
+            zip_ref.extractall(output_dir)
+        
+        print(f"SUCCESS: Dataset estratto in {output_dir}")
+        print("Struttura rilevata: " + str(os.listdir(output_dir)))
+
+    except Exception as e:
+        print(f"FALLIMENTO CRITICO: {e}")
+        print("\n--- SOLUZIONE MANUALE ---")
+        print(f"Se lo script fallisce, scarica manualmente da qui: {url}")
+        print(f"E scompatta il contenuto in: {os.path.abspath(output_dir)}")
+
+if __name__ == "__main__":
+    download_codesearchnet_robust()
+
+================================================================================
+
+--- FILE: inspect_dataset.py | PATH: Project\data\inspect_dataset.py ---
+------------------------------------------------------------------------
+
+import gzip
+import json
+import os
+import glob
+
+def save_human_readable_samples(datasets_dir="Project/Datasets", output_subdir="Human_readable_sample", num_examples=10):
+    # Definiamo il percorso completo della cartella e del file
+    full_output_dir = os.path.join(datasets_dir, output_subdir)
+    output_file = os.path.join(full_output_dir, "data_preview.txt")
+    
+    # Creazione della sottocartella (Directory Encapsulation)
+    if not os.path.exists(full_output_dir):
+        os.makedirs(full_output_dir)
+
+    search_pattern = os.path.join(datasets_dir, "**", "train", "*.jsonl.gz")
+    files = glob.glob(search_pattern, recursive=True)
+
+    if not files:
+        return None
+
+    with open(output_file, "w", encoding="utf-8") as out:
+        out.write(f"=== DATASET PREVIEW - CODE SEARCH NET (PYTHON) ===\n")
+        out.write(f"Source File: {files[0]}\n\n")
+
+        with gzip.open(files[0], 'rt', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                if i >= num_examples: break
+                
+                data = json.loads(line)
+                code = data.get('code', data.get('func_code_string', 'N/A'))
+                doc = data.get('docstring', data.get('func_documentation_string', 'N/A'))
+
+                out.write(f"--- SAMPLE #{i+1} ---\n")
+                out.write(f"DOCSTRING: {doc.strip()}\n")
+                out.write(f"CODE:\n{code.strip()}\n")
+                out.write("-" * 50 + "\n\n")
+    
+    return output_file
+
+if __name__ == "__main__":
+    save_human_readable_samples()
+
+================================================================================
+
+--- FILE: preprocess.py | PATH: Project\data\preprocess.py ---
+--------------------------------------------------------------
+
+import os
+import json
+import gzip
+import glob
+import logging
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers, processors
+
+# Recuperiamo il logger dall'orchestratore o ne creiamo uno locale
+logger = logging.getLogger(__name__)
+
+def train_bpe_tokenizer(files, save_path, vocab_size=10000):
+    """
+    Addestra un tokenizer BPE (Byte-Pair Encoding) sul corpus fornito.
+    Il BPE è ideale per il codice perché gestisce i nomi delle variabili composti.
+    """
+    # 1. Inizializzazione: usiamo BPE con un token per i casi sconosciuti
+    tokenizer = Tokenizer(models.BPE(unk_token="<UNK>"))
+    
+    # 2. Pre-tokenizzazione: ByteLevel isola i caratteri speciali e gestisce gli spazi
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    
+    # 3. Trainer: definiamo i token speciali fondamentali per Seq2Seq
+    trainer = trainers.BpeTrainer(
+        vocab_size=vocab_size,
+        special_tokens=["<PAD>", "<SOS>", "<EOS>", "<UNK>"]
+    )
+    
+    # 4. Training effettivo
+    logger.info(f"Inizio addestramento Tokenizer BPE (Vocab size: {vocab_size})...")
+    tokenizer.train(files, trainer)
+    
+    # 5. Post-processing (Opzionale ma utile per la stabilità)
+    tokenizer.save(save_path)
+    logger.info(f"Tokenizer salvato con successo in: {save_path}")
+
+def prepare_vocab(data_dir, tokenizer_path):
+    """
+    Scansiona i dati di training e prepara il file temp_corpus.txt per il training.
+    """
+    # Ricerca ricorsiva (Data Discovery)
+    train_files = glob.glob(os.path.join(data_dir, "**", "train", "*.jsonl.gz"), recursive=True)
+    
+    if not train_files:
+        logger.error(f"Errore: Nessun file di training trovato in {data_dir}")
+        return
+
+    temp_text_file = "temp_corpus.txt"
+    logger.info(f"Estrazione testi da {len(train_files)} file compressi...")
+    
+    try:
+        with open(temp_text_file, 'w', encoding='utf-8') as out:
+            for file_path in train_files:
+                with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                    for line in f:
+                        item = json.loads(line)
+                        # Estrazione flessibile basata sulla struttura CodeSearchNet
+                        code = item.get('code', item.get('func_code_string', ''))
+                        doc = item.get('docstring', item.get('func_documentation_string', ''))
+                        
+                        # Scriviamo tutto nel corpus per il training del tokenizer
+                        out.write(code + "\n" + doc + "\n")
+        
+        # Chiamata alla funzione di addestramento
+        train_bpe_tokenizer([temp_text_file], tokenizer_path)
+        
+    finally:
+        # Pulizia del file temporaneo per non inquinare il disco
+        if os.path.exists(temp_text_file):
+            os.remove(temp_text_file)
+            logger.info("File temporaneo rimosso.")
+
+if __name__ == "__main__":
+    # Test isolato se eseguito direttamente
+    logging.basicConfig(level=logging.INFO)
+    prepare_vocab("Project/Datasets", "Project/tokenizer.json")
+
+================================================================================
+
+--- FILE: data_preview.txt | PATH: Project\Datasets\Human_readable_sample\data_preview.txt ---
+----------------------------------------------------------------------------------------------
+
+=== DATASET PREVIEW - CODE SEARCH NET (PYTHON) ===
+Source File: Project/Datasets\python\final\jsonl\train\python_train_0.jsonl.gz
+
+--- SAMPLE #1 ---
+DOCSTRING: Trains a k-nearest neighbors classifier for face recognition.
+
+    :param train_dir: directory that contains a sub-directory for each known person, with its name.
+
+     (View in source code to see train_dir example tree structure)
+
+     Structure:
+        <train_dir>/
+        ├── <person1>/
+        │   ├── <somename1>.jpeg
+        │   ├── <somename2>.jpeg
+        │   ├── ...
+        ├── <person2>/
+        │   ├── <somename1>.jpeg
+        │   └── <somename2>.jpeg
+        └── ...
+
+    :param model_save_path: (optional) path to save model on disk
+    :param n_neighbors: (optional) number of neighbors to weigh in classification. Chosen automatically if not specified
+    :param knn_algo: (optional) underlying data structure to support knn.default is ball_tree
+    :param verbose: verbosity of training
+    :return: returns knn classifier that was trained on the given data.
+CODE:
+def train(train_dir, model_save_path=None, n_neighbors=None, knn_algo='ball_tree', verbose=False):
+    """
+    Trains a k-nearest neighbors classifier for face recognition.
+
+    :param train_dir: directory that contains a sub-directory for each known person, with its name.
+
+     (View in source code to see train_dir example tree structure)
+
+     Structure:
+        <train_dir>/
+        ├── <person1>/
+        │   ├── <somename1>.jpeg
+        │   ├── <somename2>.jpeg
+        │   ├── ...
+        ├── <person2>/
+        │   ├── <somename1>.jpeg
+        │   └── <somename2>.jpeg
+        └── ...
+
+    :param model_save_path: (optional) path to save model on disk
+    :param n_neighbors: (optional) number of neighbors to weigh in classification. Chosen automatically if not specified
+    :param knn_algo: (optional) underlying data structure to support knn.default is ball_tree
+    :param verbose: verbosity of training
+    :return: returns knn classifier that was trained on the given data.
+    """
+    X = []
+    y = []
+
+    # Loop through each person in the training set
+    for class_dir in os.listdir(train_dir):
+        if not os.path.isdir(os.path.join(train_dir, class_dir)):
+            continue
+
+        # Loop through each training image for the current person
+        for img_path in image_files_in_folder(os.path.join(train_dir, class_dir)):
+            image = face_recognition.load_image_file(img_path)
+            face_bounding_boxes = face_recognition.face_locations(image)
+
+            if len(face_bounding_boxes) != 1:
+                # If there are no people (or too many people) in a training image, skip the image.
+                if verbose:
+                    print("Image {} not suitable for training: {}".format(img_path, "Didn't find a face" if len(face_bounding_boxes) < 1 else "Found more than one face"))
+            else:
+                # Add face encoding for current image to the training set
+                X.append(face_recognition.face_encodings(image, known_face_locations=face_bounding_boxes)[0])
+                y.append(class_dir)
+
+    # Determine how many neighbors to use for weighting in the KNN classifier
+    if n_neighbors is None:
+        n_neighbors = int(round(math.sqrt(len(X))))
+        if verbose:
+            print("Chose n_neighbors automatically:", n_neighbors)
+
+    # Create and train the KNN classifier
+    knn_clf = neighbors.KNeighborsClassifier(n_neighbors=n_neighbors, algorithm=knn_algo, weights='distance')
+    knn_clf.fit(X, y)
+
+    # Save the trained KNN classifier
+    if model_save_path is not None:
+        with open(model_save_path, 'wb') as f:
+            pickle.dump(knn_clf, f)
+
+    return knn_clf
+--------------------------------------------------
+
+--- SAMPLE #2 ---
+DOCSTRING: Recognizes faces in given image using a trained KNN classifier
+
+    :param X_img_path: path to image to be recognized
+    :param knn_clf: (optional) a knn classifier object. if not specified, model_save_path must be specified.
+    :param model_path: (optional) path to a pickled knn classifier. if not specified, model_save_path must be knn_clf.
+    :param distance_threshold: (optional) distance threshold for face classification. the larger it is, the more chance
+           of mis-classifying an unknown person as a known one.
+    :return: a list of names and face locations for the recognized faces in the image: [(name, bounding box), ...].
+        For faces of unrecognized persons, the name 'unknown' will be returned.
+CODE:
+def predict(X_img_path, knn_clf=None, model_path=None, distance_threshold=0.6):
+    """
+    Recognizes faces in given image using a trained KNN classifier
+
+    :param X_img_path: path to image to be recognized
+    :param knn_clf: (optional) a knn classifier object. if not specified, model_save_path must be specified.
+    :param model_path: (optional) path to a pickled knn classifier. if not specified, model_save_path must be knn_clf.
+    :param distance_threshold: (optional) distance threshold for face classification. the larger it is, the more chance
+           of mis-classifying an unknown person as a known one.
+    :return: a list of names and face locations for the recognized faces in the image: [(name, bounding box), ...].
+        For faces of unrecognized persons, the name 'unknown' will be returned.
+    """
+    if not os.path.isfile(X_img_path) or os.path.splitext(X_img_path)[1][1:] not in ALLOWED_EXTENSIONS:
+        raise Exception("Invalid image path: {}".format(X_img_path))
+
+    if knn_clf is None and model_path is None:
+        raise Exception("Must supply knn classifier either thourgh knn_clf or model_path")
+
+    # Load a trained KNN model (if one was passed in)
+    if knn_clf is None:
+        with open(model_path, 'rb') as f:
+            knn_clf = pickle.load(f)
+
+    # Load image file and find face locations
+    X_img = face_recognition.load_image_file(X_img_path)
+    X_face_locations = face_recognition.face_locations(X_img)
+
+    # If no faces are found in the image, return an empty result.
+    if len(X_face_locations) == 0:
+        return []
+
+    # Find encodings for faces in the test iamge
+    faces_encodings = face_recognition.face_encodings(X_img, known_face_locations=X_face_locations)
+
+    # Use the KNN model to find the best matches for the test face
+    closest_distances = knn_clf.kneighbors(faces_encodings, n_neighbors=1)
+    are_matches = [closest_distances[0][i][0] <= distance_threshold for i in range(len(X_face_locations))]
+
+    # Predict classes and remove classifications that aren't within the threshold
+    return [(pred, loc) if rec else ("unknown", loc) for pred, loc, rec in zip(knn_clf.predict(faces_encodings), X_face_locations, are_matches)]
+--------------------------------------------------
+
+--- SAMPLE #3 ---
+DOCSTRING: Shows the face recognition results visually.
+
+    :param img_path: path to image to be recognized
+    :param predictions: results of the predict function
+    :return:
+CODE:
+def show_prediction_labels_on_image(img_path, predictions):
+    """
+    Shows the face recognition results visually.
+
+    :param img_path: path to image to be recognized
+    :param predictions: results of the predict function
+    :return:
+    """
+    pil_image = Image.open(img_path).convert("RGB")
+    draw = ImageDraw.Draw(pil_image)
+
+    for name, (top, right, bottom, left) in predictions:
+        # Draw a box around the face using the Pillow module
+        draw.rectangle(((left, top), (right, bottom)), outline=(0, 0, 255))
+
+        # There's a bug in Pillow where it blows up with non-UTF-8 text
+        # when using the default bitmap font
+        name = name.encode("UTF-8")
+
+        # Draw a label with a name below the face
+        text_width, text_height = draw.textsize(name)
+        draw.rectangle(((left, bottom - text_height - 10), (right, bottom)), fill=(0, 0, 255), outline=(0, 0, 255))
+        draw.text((left + 6, bottom - text_height - 5), name, fill=(255, 255, 255, 255))
+
+    # Remove the drawing library from memory as per the Pillow docs
+    del draw
+
+    # Display the resulting image
+    pil_image.show()
+--------------------------------------------------
+
+--- SAMPLE #4 ---
+DOCSTRING: Convert a dlib 'rect' object to a plain tuple in (top, right, bottom, left) order
+
+    :param rect: a dlib 'rect' object
+    :return: a plain tuple representation of the rect in (top, right, bottom, left) order
+CODE:
+def _rect_to_css(rect):
+    """
+    Convert a dlib 'rect' object to a plain tuple in (top, right, bottom, left) order
+
+    :param rect: a dlib 'rect' object
+    :return: a plain tuple representation of the rect in (top, right, bottom, left) order
+    """
+    return rect.top(), rect.right(), rect.bottom(), rect.left()
+--------------------------------------------------
+
+--- SAMPLE #5 ---
+DOCSTRING: Make sure a tuple in (top, right, bottom, left) order is within the bounds of the image.
+
+    :param css:  plain tuple representation of the rect in (top, right, bottom, left) order
+    :param image_shape: numpy shape of the image array
+    :return: a trimmed plain tuple representation of the rect in (top, right, bottom, left) order
+CODE:
+def _trim_css_to_bounds(css, image_shape):
+    """
+    Make sure a tuple in (top, right, bottom, left) order is within the bounds of the image.
+
+    :param css:  plain tuple representation of the rect in (top, right, bottom, left) order
+    :param image_shape: numpy shape of the image array
+    :return: a trimmed plain tuple representation of the rect in (top, right, bottom, left) order
+    """
+    return max(css[0], 0), min(css[1], image_shape[1]), min(css[2], image_shape[0]), max(css[3], 0)
+--------------------------------------------------
+
+--- SAMPLE #6 ---
+DOCSTRING: Given a list of face encodings, compare them to a known face encoding and get a euclidean distance
+    for each comparison face. The distance tells you how similar the faces are.
+
+    :param faces: List of face encodings to compare
+    :param face_to_compare: A face encoding to compare against
+    :return: A numpy ndarray with the distance for each face in the same order as the 'faces' array
+CODE:
+def face_distance(face_encodings, face_to_compare):
+    """
+    Given a list of face encodings, compare them to a known face encoding and get a euclidean distance
+    for each comparison face. The distance tells you how similar the faces are.
+
+    :param faces: List of face encodings to compare
+    :param face_to_compare: A face encoding to compare against
+    :return: A numpy ndarray with the distance for each face in the same order as the 'faces' array
+    """
+    if len(face_encodings) == 0:
+        return np.empty((0))
+
+    return np.linalg.norm(face_encodings - face_to_compare, axis=1)
+--------------------------------------------------
+
+--- SAMPLE #7 ---
+DOCSTRING: Loads an image file (.jpg, .png, etc) into a numpy array
+
+    :param file: image file name or file object to load
+    :param mode: format to convert the image to. Only 'RGB' (8-bit RGB, 3 channels) and 'L' (black and white) are supported.
+    :return: image contents as numpy array
+CODE:
+def load_image_file(file, mode='RGB'):
+    """
+    Loads an image file (.jpg, .png, etc) into a numpy array
+
+    :param file: image file name or file object to load
+    :param mode: format to convert the image to. Only 'RGB' (8-bit RGB, 3 channels) and 'L' (black and white) are supported.
+    :return: image contents as numpy array
+    """
+    im = PIL.Image.open(file)
+    if mode:
+        im = im.convert(mode)
+    return np.array(im)
+--------------------------------------------------
+
+--- SAMPLE #8 ---
+DOCSTRING: Returns an array of bounding boxes of human faces in a image
+
+    :param img: An image (as a numpy array)
+    :param number_of_times_to_upsample: How many times to upsample the image looking for faces. Higher numbers find smaller faces.
+    :param model: Which face detection model to use. "hog" is less accurate but faster on CPUs. "cnn" is a more accurate
+                  deep-learning model which is GPU/CUDA accelerated (if available). The default is "hog".
+    :return: A list of dlib 'rect' objects of found face locations
+CODE:
+def _raw_face_locations(img, number_of_times_to_upsample=1, model="hog"):
+    """
+    Returns an array of bounding boxes of human faces in a image
+
+    :param img: An image (as a numpy array)
+    :param number_of_times_to_upsample: How many times to upsample the image looking for faces. Higher numbers find smaller faces.
+    :param model: Which face detection model to use. "hog" is less accurate but faster on CPUs. "cnn" is a more accurate
+                  deep-learning model which is GPU/CUDA accelerated (if available). The default is "hog".
+    :return: A list of dlib 'rect' objects of found face locations
+    """
+    if model == "cnn":
+        return cnn_face_detector(img, number_of_times_to_upsample)
+    else:
+        return face_detector(img, number_of_times_to_upsample)
+--------------------------------------------------
+
+--- SAMPLE #9 ---
+DOCSTRING: Returns an array of bounding boxes of human faces in a image
+
+    :param img: An image (as a numpy array)
+    :param number_of_times_to_upsample: How many times to upsample the image looking for faces. Higher numbers find smaller faces.
+    :param model: Which face detection model to use. "hog" is less accurate but faster on CPUs. "cnn" is a more accurate
+                  deep-learning model which is GPU/CUDA accelerated (if available). The default is "hog".
+    :return: A list of tuples of found face locations in css (top, right, bottom, left) order
+CODE:
+def face_locations(img, number_of_times_to_upsample=1, model="hog"):
+    """
+    Returns an array of bounding boxes of human faces in a image
+
+    :param img: An image (as a numpy array)
+    :param number_of_times_to_upsample: How many times to upsample the image looking for faces. Higher numbers find smaller faces.
+    :param model: Which face detection model to use. "hog" is less accurate but faster on CPUs. "cnn" is a more accurate
+                  deep-learning model which is GPU/CUDA accelerated (if available). The default is "hog".
+    :return: A list of tuples of found face locations in css (top, right, bottom, left) order
+    """
+    if model == "cnn":
+        return [_trim_css_to_bounds(_rect_to_css(face.rect), img.shape) for face in _raw_face_locations(img, number_of_times_to_upsample, "cnn")]
+    else:
+        return [_trim_css_to_bounds(_rect_to_css(face), img.shape) for face in _raw_face_locations(img, number_of_times_to_upsample, model)]
+--------------------------------------------------
+
+--- SAMPLE #10 ---
+DOCSTRING: Returns an 2d array of bounding boxes of human faces in a image using the cnn face detector
+    If you are using a GPU, this can give you much faster results since the GPU
+    can process batches of images at once. If you aren't using a GPU, you don't need this function.
+
+    :param img: A list of images (each as a numpy array)
+    :param number_of_times_to_upsample: How many times to upsample the image looking for faces. Higher numbers find smaller faces.
+    :param batch_size: How many images to include in each GPU processing batch.
+    :return: A list of tuples of found face locations in css (top, right, bottom, left) order
+CODE:
+def batch_face_locations(images, number_of_times_to_upsample=1, batch_size=128):
+    """
+    Returns an 2d array of bounding boxes of human faces in a image using the cnn face detector
+    If you are using a GPU, this can give you much faster results since the GPU
+    can process batches of images at once. If you aren't using a GPU, you don't need this function.
+
+    :param img: A list of images (each as a numpy array)
+    :param number_of_times_to_upsample: How many times to upsample the image looking for faces. Higher numbers find smaller faces.
+    :param batch_size: How many images to include in each GPU processing batch.
+    :return: A list of tuples of found face locations in css (top, right, bottom, left) order
+    """
+    def convert_cnn_detections_to_css(detections):
+        return [_trim_css_to_bounds(_rect_to_css(face.rect), images[0].shape) for face in detections]
+
+    raw_detections_batched = _raw_face_locations_batched(images, number_of_times_to_upsample, batch_size)
+
+    return list(map(convert_cnn_detections_to_css, raw_detections_batched))
+--------------------------------------------------
+
+
+
+================================================================================
+
+--- FILE: README.md | PATH: Project\models\README.md ---
+--------------------------------------------------------
+
+# Cartella `models`
+
+Questa cartella conterrà le definizioni di tutti i moduli PyTorch che compongono l'architettura del modello di deep learning.
+
+L'architettura di partenza sarà un modello **Sequence-to-Sequence (Seq2Seq)** con RNN (LSTM o GRU).
+
+## Implementazione Prevista
+
+1.  **Encoder (`encoder.py`):**
+    *   **Classe `Encoder(torch.nn.Module)`:**
+    *   **Componenti:**
+        *   `torch.nn.Embedding`: Per convertire gli indici dei token del codice sorgente in vettori densi (embedding).
+        *   `torch.nn.LSTM` o `torch.nn.GRU`: Per processare la sequenza di embedding e produrre un "vettore di contesto" (l'ultimo stato nascosto dell'RNN).
+    *   **Input:** Sequenza di token del codice sorgente.
+    *   **Output:** Output dell'RNN e stati nascosti/cella (il vettore di contesto).
+
+2.  **Decoder (`decoder.py`):**
+    *   **Classe `Decoder(torch.nn.Module)`:**
+    *   **Componenti:**
+        *   `torch.nn.Embedding`: Per i token del riassunto.
+        *   `torch.nn.LSTM` o `torch.nn.GRU`: Per generare la sequenza di output token per token.
+        *   `torch.nn.Linear`: Uno strato lineare finale per mappare lo stato nascosto dell'RNN a una distribuzione di probabilità sul vocabolario dei riassunti.
+        *   `torch.nn.LogSoftmax`: Per ottenere le probabilità logaritmiche.
+    *   **Input:** Il vettore di contesto dall'encoder e il token precedente della sequenza generata.
+    *   **Output:** La predizione del token successivo nella sequenza.
+
+3.  **Modello Principale (`seq2seq.py`):**
+    *   **Classe `Seq2Seq(torch.nn.Module)`:**
+    *   **Componenti:**
+        *   Un'istanza dell'Encoder.
+        *   Un'istanza del Decoder.
+    *   **Logica:**
+        *   Orchestra il flusso dei dati: prende la sequenza di input, la passa all'encoder, usa il vettore di contesto per inizializzare il decoder.
+        *   Implementa il ciclo di generazione del decoder.
+        *   Gestisce il "teacher forcing": durante il training, decide se alimentare il decoder con il token predetto o con il token reale della sequenza target, per stabilizzare l'addestramento.
 
 
 ================================================================================
@@ -253,6 +913,98 @@ class Seq2Seq(nn.Module):
             input = trg[:, t] if teacher_force else top1
             
         return outputs
+
+================================================================================
+
+--- FILE: C2Orchestrator.py | PATH: Project\scripts\C2Orchestrator.py ---
+-------------------------------------------------------------------------
+
+import os
+import argparse
+import logging
+from data.download_dataset import download_codesearchnet_robust
+from data.inspect_dataset import save_human_readable_samples
+from data.preprocess import prepare_vocab
+from scripts.train import main as run_training
+from scripts.evaluate import main as run_evaluation
+
+# Setup logging con precisione chirurgica
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+class CodeSummarizationPipeline:
+    def __init__(self, config):
+        self.config = config
+        self.data_dir = "Project/Datasets"
+        self.tokenizer_path = "Project/tokenizer.json"
+        # Sottocartella dedicata per l'audit umano
+        self.preview_subdir = "Human_readable_sample"
+
+    def run(self):
+        logger.info("--- AVVIO PIPELINE DI CODE SUMMARIZATION ---")
+
+        # FASE 1: ACQUISIZIONE (EXTRACT)
+        # Implementazione del principio di Idempotenza: non scaricare se già presente
+        if not os.path.exists(self.data_dir) or self.config.force_download:
+            logger.info("Fase 1: Download robusto del dataset via CDN...")
+            download_codesearchnet_robust(self.data_dir)
+        else:
+            logger.info("Fase 1: Dataset già presente localmente.")
+
+        # FASE 1.1: ISPEZIONE (HUMAN CHECK)
+        # Trasformiamo i bit compressi in evidenza documentale leggibile
+        logger.info(f"Fase 1.1: Generazione campioni leggibili in {self.preview_subdir}...")
+        preview_file = save_human_readable_samples(self.data_dir, self.preview_subdir)
+        
+        if preview_file:
+            logger.info(f"Ispezione completata con successo. File: {preview_file}")
+        else:
+            logger.warning("Fase 1.1: Impossibile generare l'ispezione. Verifica i file .jsonl.gz")
+
+        # FASE 2: PREPROCESSING (TRANSFORM)
+        # Costruzione dell'Iperspazio Semantico (Tokenizer BPE)
+        if not os.path.exists(self.tokenizer_path) or self.config.force_preprocess:
+            logger.info("Fase 2: Addestramento Tokenizer BPE e Preprocessing...")
+            prepare_vocab(self.data_dir, self.tokenizer_path)
+        else:
+            logger.info("Fase 2: Tokenizer già presente. Skipping.")
+
+        # FASE 3: TRAINING (LEARN)
+        # Fase critica: Ottimizzazione stocastica dei pesi
+        logger.info("Fase 3: Avvio Addestramento del Modello (LSTM Seq2Seq)...")
+        run_training(epochs=self.config.epochs, batch_size=self.config.batch_size)
+
+        # FASE 4: VALUTAZIONE (VALIDATE)
+        # Calcolo delle metriche di generalizzazione (BLEU/ROUGE)
+        logger.info("Fase 4: Valutazione finale sul Test Set...")
+        run_evaluation(model_path="best-model.pt")
+
+        logger.info("--- PIPELINE COMPLETATA CON SUCCESSO ---")
+
+
+
+
+
+
+
+
+
+
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Master Orchestrator - Project MLSA")
+    parser.add_argument("--subset", type=int, default=1000, help="Subset per test rapido")
+    parser.add_argument("--epochs", type=int, default=10, help="Numero di epoche di training")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size per SGD")
+    parser.add_argument("--force_download", action="store_true", help="Forza il re-download")
+    parser.add_argument("--force_preprocess", action="store_true", help="Forza il re-tokenizer")
+    
+    args = parser.parse_args()
+    
+    pipeline = CodeSummarizationPipeline(args)
+    pipeline.run()
 
 ================================================================================
 

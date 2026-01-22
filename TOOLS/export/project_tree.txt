@@ -3,36 +3,49 @@ Project Tree for: c:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project
 
 Project/
 ├───configs.txt
+├───requirements.txt
+├───tokenizer.json
 ├───data/
     ├───README.md
-├───dataset/
+    ├───dataset.py
+    ├───download_dataset.py
+    ├───inspect_dataset.py
     ├───preprocess.py
-    ├───go/
-        ├───test.txt
-        ├───valid.txt
-    ├───java/
-        ├───test.txt
-        ├───train.txt
-        ├───valid.txt
-    ├───javascript/
-        ├───test.txt
-        ├───train.txt
-        ├───valid.txt
-    ├───php/
-        ├───test.txt
-        ├───train.txt
-        ├───valid.txt
+├───Datasets/
+    ├───python_dedupe_definitions_v2.pkl
+    ├───python_licenses.pkl
+    ├───Human_readable_sample/
+        ├───data_preview.txt
     ├───python/
-        ├───test.txt
-        ├───train.txt
-        ├───valid.txt
-    ├───ruby/
-        ├───test.txt
-        ├───train.txt
-        ├───valid.txt
+        ├───final/
+            ├───jsonl/
+                ├───test/
+                    ├───python_test_0.jsonl.gz
+                ├───train/
+                    ├───python_train_0.jsonl.gz
+                    ├───python_train_1.jsonl.gz
+                    ├───python_train_10.jsonl.gz
+                    ├───python_train_11.jsonl.gz
+                    ├───python_train_12.jsonl.gz
+                    ├───python_train_13.jsonl.gz
+                    ├───python_train_2.jsonl.gz
+                    ├───python_train_3.jsonl.gz
+                    ├───python_train_4.jsonl.gz
+                    ├───python_train_5.jsonl.gz
+                    ├───python_train_6.jsonl.gz
+                    ├───python_train_7.jsonl.gz
+                    ├───python_train_8.jsonl.gz
+                    ├───python_train_9.jsonl.gz
+                ├───valid/
+                    ├───python_valid_0.jsonl.gz
 ├───models/
     ├───README.md
+    ├───attention.py
+    ├───decoder.py
+    ├───encoder.py
+    ├───seq2seq.py
 ├───scripts/
+    ├───C2Orchestrator.py
     ├───README.md
 ├───src/
     ├───README.md
