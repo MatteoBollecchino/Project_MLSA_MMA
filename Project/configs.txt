@@ -1,10 +1,10 @@
 # Specifiche Tecniche: ML-Based Python Code Summarization
 
 metadata:
-  data: 12 Gennaio 2026
+  data: 13 Febbraio 2026
   deadline: 
-    code_report: 16 Gennaio 2026
-    discussione: 23 Gennaio 2026
+    code_report: 13 Febbraio 2026
+    discussione: 20 Febbraio 2026
   corso: Machine Learning for Software Analysis
 
 obiettivo_core:
