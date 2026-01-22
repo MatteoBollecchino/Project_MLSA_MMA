@@ -1,6 +1,89 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-22 11:02:04
+Generated on: 2026-01-22 12:41:17
+================================================================================
+
+--- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
+-----------------------------------------------------------------
+
+import os
+import argparse
+import logging
+import torch
+from data.download_dataset import download_codesearchnet_robust
+from data.inspect_dataset import save_human_readable_samples
+from data.preprocess import prepare_vocab
+from data.dataset import get_dataloader
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+class CodeSummarizationPipeline:
+    def __init__(self, config):
+        self.config = config
+        self.data_root = "Project/Datasets"
+        self.jsonl_base = os.path.join(self.data_root, "python", "final", "jsonl")
+        self.tokenizer_path = "Project/tokenizer.json"
+        self.preview_subdir = "Human_readable_sample"
+
+    def run(self):
+        logger.info("--- MASTER PIPELINE START ---")
+
+        # FASE 1: ACQUISIZIONE
+        if not os.path.exists(self.jsonl_base) or self.config.force_download:
+            logger.info("Fase 1: Download e scompattamento...")
+            download_codesearchnet_robust(self.data_root)
+        else:
+            logger.info("Fase 1: Dataset già presente localmente.")
+
+        # FASE 1.1: ISPEZIONE UMANA (Il tuo "Sanity Check" visivo)
+        # Genera il file .txt per permetterti di leggere docstring e codice pulito
+        logger.info(f"Fase 1.1: Generazione campioni leggibili in {self.preview_subdir}...")
+        preview_file = save_human_readable_samples(self.data_root, self.preview_subdir)
+        if preview_file:
+            logger.info(f"Audit visivo pronto: {preview_file}")
+
+        # FASE 2: PREPROCESSING (FIT del Tokenizer)
+        if not os.path.exists(self.tokenizer_path) or self.config.force_preprocess:
+            logger.info("Fase 2: Addestramento Tokenizer BPE (FIT)...")
+            prepare_vocab(self.jsonl_base, self.tokenizer_path)
+        else:
+            logger.info("Fase 2: Tokenizer già esistente.")
+
+        # FASE 2.1: VALIDAZIONE TRASFORMAZIONE (TRANSFORM Check)
+        # Verifichiamo che la catena Stringa -> ID -> Tensor funzioni
+        logger.info("Fase 2.1: Verifica della trasformazione numerica (TRANSFORM)...")
+        try:
+            test_loader = get_dataloader(
+                data_dir=self.jsonl_base, 
+                split_type="train", 
+                tokenizer_path=self.tokenizer_path,
+                batch_size=2,
+                subset=5 
+            )
+            code_batch, doc_batch = next(iter(test_loader))
+            
+            logger.info("SUCCESS: Il DataLoader ha prodotto tensori validi.")
+            logger.info(f"Esempio di sequenza ID (Codice): {code_batch[0][:10].tolist()}...")
+            logger.info(f"Dimensione Batch: {code_batch.shape}")
+            
+        except Exception as e:
+            logger.error(f"CRITICAL: Errore nel caricamento dati: {e}")
+            return
+
+        logger.info("--- PIPELINE DATI VALIDATA E PRONTA PER IL TRAINING ---")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--force_download", action="store_true")
+    parser.add_argument("--force_preprocess", action="store_true")
+    
+    args = parser.parse_args()
+    pipeline = CodeSummarizationPipeline(args)
+    pipeline.run()
+
 ================================================================================
 
 --- FILE: configs.txt | PATH: Project\configs.txt ---
@@ -9,10 +92,10 @@ Generated on: 2026-01-22 11:02:04
 # Specifiche Tecniche: ML-Based Python Code Summarization
 
 metadata:
-  data: 12 Gennaio 2026
+  data: 13 Febbraio 2026
   deadline: 
-    code_report: 16 Gennaio 2026
-    discussione: 23 Gennaio 2026
+    code_report: 13 Febbraio 2026
+    discussione: 20 Febbraio 2026
   corso: Machine Learning for Software Analysis
 
 obiettivo_core:
@@ -134,47 +217,65 @@ import json
 import gzip
 import os
 import glob
+import re
 from tokenizers import Tokenizer
+
+def clean_docstring(doc):
+    """
+    Stessa logica di pulizia usata nel preprocessing.
+    Garantisce che il modello non veda 'rumore' Sphinx o doctest.
+    """
+    if not doc: return ""
+    # Prendi solo la prima riga/frase
+    first_line = doc.split('\n\n')[0].split('\n')[0]
+    # Rimuovi tag tecnici (:param, @return, ecc.)
+    clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
+    # Rimuovi esempi di codice doctest
+    clean = re.sub(r'>>>.*', '', clean)
+    return clean.strip()
 
 class CodeSummaryDataset(Dataset):
     def __init__(self, data_dir, split_type, tokenizer_path, max_len=128, subset=None):
         """
-        data_dir: Cartella radice dei dataset (Project/Datasets)
-        split_type: 'train', 'valid' o 'test'
-        tokenizer_path: Percorso al file tokenizer.json
-        max_len: Lunghezza massima sequenze (Truncation)
-        subset: Numero massimo di campioni da caricare (opzionale, per test rapidi)
+        data_dir: Deve essere la sandbox (Project/Datasets/python/final/jsonl)
         """
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.max_len = max_len
         self.data = []
 
-        # 1. Ricerca Ricorsiva dei file .jsonl.gz (Pattern Recognition)
-        search_pattern = os.path.join(data_dir, "**", split_type, "*.jsonl.gz")
-        files = glob.glob(search_pattern, recursive=True)
+        # 1. Ricerca selettiva (No Junk Files)
+        # Cerchiamo solo nella sottocartella dello split specifico
+        search_pattern = os.path.join(data_dir, split_type, "*.jsonl.gz")
+        files = glob.glob(search_pattern)
         
         if not files:
-            raise FileNotFoundError(f"Nessun file trovato per lo split: {split_type} in {data_dir}")
+            raise FileNotFoundError(f"ERRORE: Nessun file .jsonl.gz trovato in {search_pattern}")
 
-        # 2. Caricamento Dati con Gestione della Compressione
-        print(f"Caricamento split '{split_type}' da {len(files)} file...")
+        print(f"--- Caricamento {split_type} set: {len(files)} file rilevati ---")
+
+        # 2. Caricamento e Sanitizzazione
         for file_path in files:
             with gzip.open(file_path, 'rt', encoding='utf-8') as f:
                 for line in f:
                     item = json.loads(line)
-                    # Mapping flessibile dei campi (Robustness Principle)
-                    code = item.get('code', item.get('func_code_string', ''))
-                    doc = item.get('docstring', item.get('func_documentation_string', ''))
+                    raw_code = item.get('code', item.get('func_code_string', ''))
+                    raw_doc = item.get('docstring', item.get('func_documentation_string', ''))
                     
-                    if code and doc:
-                        self.data.append({'code': code, 'doc': doc})
+                    # Applichiamo il filtro di qualità
+                    clean_doc = clean_docstring(raw_doc)
+                    
+                    # Criteri di inclusione: solo coppie "sensate"
+                    if len(clean_doc) > 10 and 10 < len(raw_code.split()) < 200:
+                        self.data.append({'code': raw_code, 'doc': clean_doc})
                     
                     if subset and len(self.data) >= subset:
                         break
             if subset and len(self.data) >= subset:
                 break
         
-        # Identificatori speciali dal Tokenizer
+        print(f"Esempi caricati per {split_type}: {len(self.data)}")
+
+        # Special Tokens
         self.pad_id = self.tokenizer.token_to_id("<PAD>")
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
         self.eos_id = self.tokenizer.token_to_id("<EOS>")
@@ -185,40 +286,28 @@ class CodeSummaryDataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
         
-        # Tokenizzazione dinamica (JIT Processing)
-        # Codice (Source)
+        # TRANSFORM: Da testo pulito a ID numerici
         code_tokens = self.tokenizer.encode(item['code']).ids
         code_ids = [self.sos_id] + code_tokens[:self.max_len-2] + [self.eos_id]
         
-        # Sommario (Target)
         doc_tokens = self.tokenizer.encode(item['doc']).ids
         doc_ids = [self.sos_id] + doc_tokens[:self.max_len-2] + [self.eos_id]
         
         return torch.tensor(code_ids), torch.tensor(doc_ids)
 
 def collate_fn(batch, pad_id=0):
-    """
-    Gestisce il padding dinamico per ogni batch (Normalization of Variance)
-    """
     code_seqs, doc_seqs = zip(*batch)
-    
-    # Padding: tutte le sequenze del batch avranno la lunghezza della più lunga nel batch
     code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=pad_id)
     doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=pad_id)
-    
     return code_padded, doc_padded
 
 def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
     dataset = CodeSummaryDataset(data_dir, split_type, tokenizer_path, subset=subset)
-    
-    # Passiamo il pad_id alla collate_fn tramite lambda
-    pad_id = dataset.pad_id
-    
     return DataLoader(
         dataset, 
         batch_size=batch_size, 
         shuffle=shuffle, 
-        collate_fn=lambda b: collate_fn(b, pad_id)
+        collate_fn=lambda b: collate_fn(b, dataset.pad_id)
     )
 
 ================================================================================
@@ -275,7 +364,7 @@ import json
 import os
 import glob
 
-def save_human_readable_samples(datasets_dir="Project/Datasets", output_subdir="Human_readable_sample", num_examples=10):
+def save_human_readable_samples(datasets_dir="Project/Datasets", output_subdir="Human_readable_sample", num_examples=100):
     # Definiamo il percorso completo della cartella e del file
     full_output_dir = os.path.join(datasets_dir, output_subdir)
     output_file = os.path.join(full_output_dir, "data_preview.txt")
@@ -322,49 +411,52 @@ import json
 import gzip
 import glob
 import logging
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers, processors
+import re
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 
-# Recuperiamo il logger dall'orchestratore o ne creiamo uno locale
 logger = logging.getLogger(__name__)
 
+def clean_docstring(doc):
+    """
+    Rimuove il rumore dalle docstring (GIGO Principle).
+    Prende solo la prima riga e rimuove tag Sphinx/doctest.
+    """
+    if not doc: return ""
+    # 1. Prendi solo la prima parte prima di una riga vuota o un punto fermo
+    first_line = doc.split('\n\n')[0].split('\n')[0]
+    # 2. Rimuove tag come :param:, :return:, @param ecc.
+    clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
+    # 3. Rimuove eventuali residui di doctest (>>>)
+    clean = re.sub(r'>>>.*', '', clean)
+    return clean.strip()
+
 def train_bpe_tokenizer(files, save_path, vocab_size=10000):
-    """
-    Addestra un tokenizer BPE (Byte-Pair Encoding) sul corpus fornito.
-    Il BPE è ideale per il codice perché gestisce i nomi delle variabili composti.
-    """
-    # 1. Inizializzazione: usiamo BPE con un token per i casi sconosciuti
     tokenizer = Tokenizer(models.BPE(unk_token="<UNK>"))
-    
-    # 2. Pre-tokenizzazione: ByteLevel isola i caratteri speciali e gestisce gli spazi
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
     
-    # 3. Trainer: definiamo i token speciali fondamentali per Seq2Seq
     trainer = trainers.BpeTrainer(
         vocab_size=vocab_size,
         special_tokens=["<PAD>", "<SOS>", "<EOS>", "<UNK>"]
     )
     
-    # 4. Training effettivo
-    logger.info(f"Inizio addestramento Tokenizer BPE (Vocab size: {vocab_size})...")
-    tokenizer.train(files, trainer)
-    
-    # 5. Post-processing (Opzionale ma utile per la stabilità)
+    logger.info(f"Training BPE Tokenizer (Vocab: {vocab_size})...")
+    tokenizer.train(files, trainer) #SIIUUUm
     tokenizer.save(save_path)
-    logger.info(f"Tokenizer salvato con successo in: {save_path}")
 
-def prepare_vocab(data_dir, tokenizer_path):
+def prepare_vocab(jsonl_base_dir, tokenizer_path):
     """
-    Scansiona i dati di training e prepara il file temp_corpus.txt per il training.
+    Scansiona SOLO la cartella dei dati Python ed estrae il corpus pulito.
     """
-    # Ricerca ricorsiva (Data Discovery)
-    train_files = glob.glob(os.path.join(data_dir, "**", "train", "*.jsonl.gz"), recursive=True)
+    # Sandboxing: puntiamo solo alla cartella train dei dati estratti
+    search_pattern = os.path.join(jsonl_base_dir, "train", "*.jsonl.gz")
+    train_files = glob.glob(search_pattern)
     
     if not train_files:
-        logger.error(f"Errore: Nessun file di training trovato in {data_dir}")
+        logger.error(f"Sandbox vuota! Nessun file in {search_pattern}")
         return
 
     temp_text_file = "temp_corpus.txt"
-    logger.info(f"Estrazione testi da {len(train_files)} file compressi...")
+    logger.info(f"Processing {len(train_files)} files in sandbox...")
     
     try:
         with open(temp_text_file, 'w', encoding='utf-8') as out:
@@ -372,26 +464,21 @@ def prepare_vocab(data_dir, tokenizer_path):
                 with gzip.open(file_path, 'rt', encoding='utf-8') as f:
                     for line in f:
                         item = json.loads(line)
-                        # Estrazione flessibile basata sulla struttura CodeSearchNet
                         code = item.get('code', item.get('func_code_string', ''))
                         doc = item.get('docstring', item.get('func_documentation_string', ''))
                         
-                        # Scriviamo tutto nel corpus per il training del tokenizer
-                        out.write(code + "\n" + doc + "\n")
+                        clean_doc = clean_docstring(doc)
+                        
+                        # Filtro di Qualità: evitiamo rumore troppo corto o codice immenso
+                        if len(clean_doc) > 10 and len(code.split()) < 200:
+                            out.write(code + "\n" + clean_doc + "\n")
         
-        # Chiamata alla funzione di addestramento
         train_bpe_tokenizer([temp_text_file], tokenizer_path)
         
     finally:
-        # Pulizia del file temporaneo per non inquinare il disco
         if os.path.exists(temp_text_file):
             os.remove(temp_text_file)
-            logger.info("File temporaneo rimosso.")
 
-if __name__ == "__main__":
-    # Test isolato se eseguito direttamente
-    logging.basicConfig(level=logging.INFO)
-    prepare_vocab("Project/Datasets", "Project/tokenizer.json")
 
 ================================================================================
 
@@ -738,6 +825,3538 @@ def batch_face_locations(images, number_of_times_to_upsample=1, batch_size=128):
     return list(map(convert_cnn_detections_to_css, raw_detections_batched))
 --------------------------------------------------
 
+--- SAMPLE #11 ---
+DOCSTRING: Given an image, returns a dict of face feature locations (eyes, nose, etc) for each face in the image
+
+    :param face_image: image to search
+    :param face_locations: Optionally provide a list of face locations to check.
+    :param model: Optional - which model to use. "large" (default) or "small" which only returns 5 points but is faster.
+    :return: A list of dicts of face feature locations (eyes, nose, etc)
+CODE:
+def face_landmarks(face_image, face_locations=None, model="large"):
+    """
+    Given an image, returns a dict of face feature locations (eyes, nose, etc) for each face in the image
+
+    :param face_image: image to search
+    :param face_locations: Optionally provide a list of face locations to check.
+    :param model: Optional - which model to use. "large" (default) or "small" which only returns 5 points but is faster.
+    :return: A list of dicts of face feature locations (eyes, nose, etc)
+    """
+    landmarks = _raw_face_landmarks(face_image, face_locations, model)
+    landmarks_as_tuples = [[(p.x, p.y) for p in landmark.parts()] for landmark in landmarks]
+
+    # For a definition of each point index, see https://cdn-images-1.medium.com/max/1600/1*AbEg31EgkbXSQehuNJBlWg.png
+    if model == 'large':
+        return [{
+            "chin": points[0:17],
+            "left_eyebrow": points[17:22],
+            "right_eyebrow": points[22:27],
+            "nose_bridge": points[27:31],
+            "nose_tip": points[31:36],
+            "left_eye": points[36:42],
+            "right_eye": points[42:48],
+            "top_lip": points[48:55] + [points[64]] + [points[63]] + [points[62]] + [points[61]] + [points[60]],
+            "bottom_lip": points[54:60] + [points[48]] + [points[60]] + [points[67]] + [points[66]] + [points[65]] + [points[64]]
+        } for points in landmarks_as_tuples]
+    elif model == 'small':
+        return [{
+            "nose_tip": [points[4]],
+            "left_eye": points[2:4],
+            "right_eye": points[0:2],
+        } for points in landmarks_as_tuples]
+    else:
+        raise ValueError("Invalid landmarks model type. Supported models are ['small', 'large'].")
+--------------------------------------------------
+
+--- SAMPLE #12 ---
+DOCSTRING: Given an image, return the 128-dimension face encoding for each face in the image.
+
+    :param face_image: The image that contains one or more faces
+    :param known_face_locations: Optional - the bounding boxes of each face if you already know them.
+    :param num_jitters: How many times to re-sample the face when calculating encoding. Higher is more accurate, but slower (i.e. 100 is 100x slower)
+    :return: A list of 128-dimensional face encodings (one for each face in the image)
+CODE:
+def face_encodings(face_image, known_face_locations=None, num_jitters=1):
+    """
+    Given an image, return the 128-dimension face encoding for each face in the image.
+
+    :param face_image: The image that contains one or more faces
+    :param known_face_locations: Optional - the bounding boxes of each face if you already know them.
+    :param num_jitters: How many times to re-sample the face when calculating encoding. Higher is more accurate, but slower (i.e. 100 is 100x slower)
+    :return: A list of 128-dimensional face encodings (one for each face in the image)
+    """
+    raw_landmarks = _raw_face_landmarks(face_image, known_face_locations, model="small")
+    return [np.array(face_encoder.compute_face_descriptor(face_image, raw_landmark_set, num_jitters)) for raw_landmark_set in raw_landmarks]
+--------------------------------------------------
+
+--- SAMPLE #13 ---
+DOCSTRING: Parses the given data type string to a :class:`DataType`. The data type string format equals
+    to :class:`DataType.simpleString`, except that top level struct type can omit
+    the ``struct<>`` and atomic types use ``typeName()`` as their format, e.g. use ``byte`` instead
+    of ``tinyint`` for :class:`ByteType`. We can also use ``int`` as a short name
+    for :class:`IntegerType`. Since Spark 2.3, this also supports a schema in a DDL-formatted
+    string and case-insensitive strings.
+
+    >>> _parse_datatype_string("int ")
+    IntegerType
+    >>> _parse_datatype_string("INT ")
+    IntegerType
+    >>> _parse_datatype_string("a: byte, b: decimal(  16 , 8   ) ")
+    StructType(List(StructField(a,ByteType,true),StructField(b,DecimalType(16,8),true)))
+    >>> _parse_datatype_string("a DOUBLE, b STRING")
+    StructType(List(StructField(a,DoubleType,true),StructField(b,StringType,true)))
+    >>> _parse_datatype_string("a: array< short>")
+    StructType(List(StructField(a,ArrayType(ShortType,true),true)))
+    >>> _parse_datatype_string(" map<string , string > ")
+    MapType(StringType,StringType,true)
+
+    >>> # Error cases
+    >>> _parse_datatype_string("blabla") # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ParseException:...
+    >>> _parse_datatype_string("a: int,") # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ParseException:...
+    >>> _parse_datatype_string("array<int") # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ParseException:...
+    >>> _parse_datatype_string("map<int, boolean>>") # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ParseException:...
+CODE:
+def _parse_datatype_string(s):
+    """
+    Parses the given data type string to a :class:`DataType`. The data type string format equals
+    to :class:`DataType.simpleString`, except that top level struct type can omit
+    the ``struct<>`` and atomic types use ``typeName()`` as their format, e.g. use ``byte`` instead
+    of ``tinyint`` for :class:`ByteType`. We can also use ``int`` as a short name
+    for :class:`IntegerType`. Since Spark 2.3, this also supports a schema in a DDL-formatted
+    string and case-insensitive strings.
+
+    >>> _parse_datatype_string("int ")
+    IntegerType
+    >>> _parse_datatype_string("INT ")
+    IntegerType
+    >>> _parse_datatype_string("a: byte, b: decimal(  16 , 8   ) ")
+    StructType(List(StructField(a,ByteType,true),StructField(b,DecimalType(16,8),true)))
+    >>> _parse_datatype_string("a DOUBLE, b STRING")
+    StructType(List(StructField(a,DoubleType,true),StructField(b,StringType,true)))
+    >>> _parse_datatype_string("a: array< short>")
+    StructType(List(StructField(a,ArrayType(ShortType,true),true)))
+    >>> _parse_datatype_string(" map<string , string > ")
+    MapType(StringType,StringType,true)
+
+    >>> # Error cases
+    >>> _parse_datatype_string("blabla") # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ParseException:...
+    >>> _parse_datatype_string("a: int,") # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ParseException:...
+    >>> _parse_datatype_string("array<int") # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ParseException:...
+    >>> _parse_datatype_string("map<int, boolean>>") # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ParseException:...
+    """
+    sc = SparkContext._active_spark_context
+
+    def from_ddl_schema(type_str):
+        return _parse_datatype_json_string(
+            sc._jvm.org.apache.spark.sql.types.StructType.fromDDL(type_str).json())
+
+    def from_ddl_datatype(type_str):
+        return _parse_datatype_json_string(
+            sc._jvm.org.apache.spark.sql.api.python.PythonSQLUtils.parseDataType(type_str).json())
+
+    try:
+        # DDL format, "fieldname datatype, fieldname datatype".
+        return from_ddl_schema(s)
+    except Exception as e:
+        try:
+            # For backwards compatibility, "integer", "struct<fieldname: datatype>" and etc.
+            return from_ddl_datatype(s)
+        except:
+            try:
+                # For backwards compatibility, "fieldname: datatype, fieldname: datatype" case.
+                return from_ddl_datatype("struct<%s>" % s.strip())
+            except:
+                raise e
+--------------------------------------------------
+
+--- SAMPLE #14 ---
+DOCSTRING: Return the Catalyst datatype from the size of integers.
+CODE:
+def _int_size_to_type(size):
+    """
+    Return the Catalyst datatype from the size of integers.
+    """
+    if size <= 8:
+        return ByteType
+    if size <= 16:
+        return ShortType
+    if size <= 32:
+        return IntegerType
+    if size <= 64:
+        return LongType
+--------------------------------------------------
+
+--- SAMPLE #15 ---
+DOCSTRING: Infer the DataType from obj
+CODE:
+def _infer_type(obj):
+    """Infer the DataType from obj
+    """
+    if obj is None:
+        return NullType()
+
+    if hasattr(obj, '__UDT__'):
+        return obj.__UDT__
+
+    dataType = _type_mappings.get(type(obj))
+    if dataType is DecimalType:
+        # the precision and scale of `obj` may be different from row to row.
+        return DecimalType(38, 18)
+    elif dataType is not None:
+        return dataType()
+
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key is not None and value is not None:
+                return MapType(_infer_type(key), _infer_type(value), True)
+        return MapType(NullType(), NullType(), True)
+    elif isinstance(obj, list):
+        for v in obj:
+            if v is not None:
+                return ArrayType(_infer_type(obj[0]), True)
+        return ArrayType(NullType(), True)
+    elif isinstance(obj, array):
+        if obj.typecode in _array_type_mappings:
+            return ArrayType(_array_type_mappings[obj.typecode](), False)
+        else:
+            raise TypeError("not supported type: array(%s)" % obj.typecode)
+    else:
+        try:
+            return _infer_schema(obj)
+        except TypeError:
+            raise TypeError("not supported type: %s" % type(obj))
+--------------------------------------------------
+
+--- SAMPLE #16 ---
+DOCSTRING: Infer the schema from dict/namedtuple/object
+CODE:
+def _infer_schema(row, names=None):
+    """Infer the schema from dict/namedtuple/object"""
+    if isinstance(row, dict):
+        items = sorted(row.items())
+
+    elif isinstance(row, (tuple, list)):
+        if hasattr(row, "__fields__"):  # Row
+            items = zip(row.__fields__, tuple(row))
+        elif hasattr(row, "_fields"):  # namedtuple
+            items = zip(row._fields, tuple(row))
+        else:
+            if names is None:
+                names = ['_%d' % i for i in range(1, len(row) + 1)]
+            elif len(names) < len(row):
+                names.extend('_%d' % i for i in range(len(names) + 1, len(row) + 1))
+            items = zip(names, row)
+
+    elif hasattr(row, "__dict__"):  # object
+        items = sorted(row.__dict__.items())
+
+    else:
+        raise TypeError("Can not infer schema for type: %s" % type(row))
+
+    fields = [StructField(k, _infer_type(v), True) for k, v in items]
+    return StructType(fields)
+--------------------------------------------------
+
+--- SAMPLE #17 ---
+DOCSTRING: Return whether there is NullType in `dt` or not
+CODE:
+def _has_nulltype(dt):
+    """ Return whether there is NullType in `dt` or not """
+    if isinstance(dt, StructType):
+        return any(_has_nulltype(f.dataType) for f in dt.fields)
+    elif isinstance(dt, ArrayType):
+        return _has_nulltype((dt.elementType))
+    elif isinstance(dt, MapType):
+        return _has_nulltype(dt.keyType) or _has_nulltype(dt.valueType)
+    else:
+        return isinstance(dt, NullType)
+--------------------------------------------------
+
+--- SAMPLE #18 ---
+DOCSTRING: Create a converter to drop the names of fields in obj
+CODE:
+def _create_converter(dataType):
+    """Create a converter to drop the names of fields in obj """
+    if not _need_converter(dataType):
+        return lambda x: x
+
+    if isinstance(dataType, ArrayType):
+        conv = _create_converter(dataType.elementType)
+        return lambda row: [conv(v) for v in row]
+
+    elif isinstance(dataType, MapType):
+        kconv = _create_converter(dataType.keyType)
+        vconv = _create_converter(dataType.valueType)
+        return lambda row: dict((kconv(k), vconv(v)) for k, v in row.items())
+
+    elif isinstance(dataType, NullType):
+        return lambda x: None
+
+    elif not isinstance(dataType, StructType):
+        return lambda x: x
+
+    # dataType must be StructType
+    names = [f.name for f in dataType.fields]
+    converters = [_create_converter(f.dataType) for f in dataType.fields]
+    convert_fields = any(_need_converter(f.dataType) for f in dataType.fields)
+
+    def convert_struct(obj):
+        if obj is None:
+            return
+
+        if isinstance(obj, (tuple, list)):
+            if convert_fields:
+                return tuple(conv(v) for v, conv in zip(obj, converters))
+            else:
+                return tuple(obj)
+
+        if isinstance(obj, dict):
+            d = obj
+        elif hasattr(obj, "__dict__"):  # object
+            d = obj.__dict__
+        else:
+            raise TypeError("Unexpected obj type: %s" % type(obj))
+
+        if convert_fields:
+            return tuple([conv(d.get(name)) for name, conv in zip(names, converters)])
+        else:
+            return tuple([d.get(name) for name in names])
+
+    return convert_struct
+--------------------------------------------------
+
+--- SAMPLE #19 ---
+DOCSTRING: Make a verifier that checks the type of obj against dataType and raises a TypeError if they do
+    not match.
+
+    This verifier also checks the value of obj against datatype and raises a ValueError if it's not
+    within the allowed range, e.g. using 128 as ByteType will overflow. Note that, Python float is
+    not checked, so it will become infinity when cast to Java float if it overflows.
+
+    >>> _make_type_verifier(StructType([]))(None)
+    >>> _make_type_verifier(StringType())("")
+    >>> _make_type_verifier(LongType())(0)
+    >>> _make_type_verifier(ArrayType(ShortType()))(list(range(3)))
+    >>> _make_type_verifier(ArrayType(StringType()))(set()) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    TypeError:...
+    >>> _make_type_verifier(MapType(StringType(), IntegerType()))({})
+    >>> _make_type_verifier(StructType([]))(())
+    >>> _make_type_verifier(StructType([]))([])
+    >>> _make_type_verifier(StructType([]))([1]) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> # Check if numeric values are within the allowed range.
+    >>> _make_type_verifier(ByteType())(12)
+    >>> _make_type_verifier(ByteType())(1234) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> _make_type_verifier(ByteType(), False)(None) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> _make_type_verifier(
+    ...     ArrayType(ShortType(), False))([1, None]) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> _make_type_verifier(MapType(StringType(), IntegerType()))({None: 1})
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> schema = StructType().add("a", IntegerType()).add("b", StringType(), False)
+    >>> _make_type_verifier(schema)((1, None)) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+CODE:
+def _make_type_verifier(dataType, nullable=True, name=None):
+    """
+    Make a verifier that checks the type of obj against dataType and raises a TypeError if they do
+    not match.
+
+    This verifier also checks the value of obj against datatype and raises a ValueError if it's not
+    within the allowed range, e.g. using 128 as ByteType will overflow. Note that, Python float is
+    not checked, so it will become infinity when cast to Java float if it overflows.
+
+    >>> _make_type_verifier(StructType([]))(None)
+    >>> _make_type_verifier(StringType())("")
+    >>> _make_type_verifier(LongType())(0)
+    >>> _make_type_verifier(ArrayType(ShortType()))(list(range(3)))
+    >>> _make_type_verifier(ArrayType(StringType()))(set()) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    TypeError:...
+    >>> _make_type_verifier(MapType(StringType(), IntegerType()))({})
+    >>> _make_type_verifier(StructType([]))(())
+    >>> _make_type_verifier(StructType([]))([])
+    >>> _make_type_verifier(StructType([]))([1]) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> # Check if numeric values are within the allowed range.
+    >>> _make_type_verifier(ByteType())(12)
+    >>> _make_type_verifier(ByteType())(1234) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> _make_type_verifier(ByteType(), False)(None) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> _make_type_verifier(
+    ...     ArrayType(ShortType(), False))([1, None]) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> _make_type_verifier(MapType(StringType(), IntegerType()))({None: 1})
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    >>> schema = StructType().add("a", IntegerType()).add("b", StringType(), False)
+    >>> _make_type_verifier(schema)((1, None)) # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    ValueError:...
+    """
+
+    if name is None:
+        new_msg = lambda msg: msg
+        new_name = lambda n: "field %s" % n
+    else:
+        new_msg = lambda msg: "%s: %s" % (name, msg)
+        new_name = lambda n: "field %s in %s" % (n, name)
+
+    def verify_nullability(obj):
+        if obj is None:
+            if nullable:
+                return True
+            else:
+                raise ValueError(new_msg("This field is not nullable, but got None"))
+        else:
+            return False
+
+    _type = type(dataType)
+
+    def assert_acceptable_types(obj):
+        assert _type in _acceptable_types, \
+            new_msg("unknown datatype: %s for object %r" % (dataType, obj))
+
+    def verify_acceptable_types(obj):
+        # subclass of them can not be fromInternal in JVM
+        if type(obj) not in _acceptable_types[_type]:
+            raise TypeError(new_msg("%s can not accept object %r in type %s"
+                                    % (dataType, obj, type(obj))))
+
+    if isinstance(dataType, StringType):
+        # StringType can work with any types
+        verify_value = lambda _: _
+
+    elif isinstance(dataType, UserDefinedType):
+        verifier = _make_type_verifier(dataType.sqlType(), name=name)
+
+        def verify_udf(obj):
+            if not (hasattr(obj, '__UDT__') and obj.__UDT__ == dataType):
+                raise ValueError(new_msg("%r is not an instance of type %r" % (obj, dataType)))
+            verifier(dataType.toInternal(obj))
+
+        verify_value = verify_udf
+
+    elif isinstance(dataType, ByteType):
+        def verify_byte(obj):
+            assert_acceptable_types(obj)
+            verify_acceptable_types(obj)
+            if obj < -128 or obj > 127:
+                raise ValueError(new_msg("object of ByteType out of range, got: %s" % obj))
+
+        verify_value = verify_byte
+
+    elif isinstance(dataType, ShortType):
+        def verify_short(obj):
+            assert_acceptable_types(obj)
+            verify_acceptable_types(obj)
+            if obj < -32768 or obj > 32767:
+                raise ValueError(new_msg("object of ShortType out of range, got: %s" % obj))
+
+        verify_value = verify_short
+
+    elif isinstance(dataType, IntegerType):
+        def verify_integer(obj):
+            assert_acceptable_types(obj)
+            verify_acceptable_types(obj)
+            if obj < -2147483648 or obj > 2147483647:
+                raise ValueError(
+                    new_msg("object of IntegerType out of range, got: %s" % obj))
+
+        verify_value = verify_integer
+
+    elif isinstance(dataType, ArrayType):
+        element_verifier = _make_type_verifier(
+            dataType.elementType, dataType.containsNull, name="element in array %s" % name)
+
+        def verify_array(obj):
+            assert_acceptable_types(obj)
+            verify_acceptable_types(obj)
+            for i in obj:
+                element_verifier(i)
+
+        verify_value = verify_array
+
+    elif isinstance(dataType, MapType):
+        key_verifier = _make_type_verifier(dataType.keyType, False, name="key of map %s" % name)
+        value_verifier = _make_type_verifier(
+            dataType.valueType, dataType.valueContainsNull, name="value of map %s" % name)
+
+        def verify_map(obj):
+            assert_acceptable_types(obj)
+            verify_acceptable_types(obj)
+            for k, v in obj.items():
+                key_verifier(k)
+                value_verifier(v)
+
+        verify_value = verify_map
+
+    elif isinstance(dataType, StructType):
+        verifiers = []
+        for f in dataType.fields:
+            verifier = _make_type_verifier(f.dataType, f.nullable, name=new_name(f.name))
+            verifiers.append((f.name, verifier))
+
+        def verify_struct(obj):
+            assert_acceptable_types(obj)
+
+            if isinstance(obj, dict):
+                for f, verifier in verifiers:
+                    verifier(obj.get(f))
+            elif isinstance(obj, Row) and getattr(obj, "__from_dict__", False):
+                # the order in obj could be different than dataType.fields
+                for f, verifier in verifiers:
+                    verifier(obj[f])
+            elif isinstance(obj, (tuple, list)):
+                if len(obj) != len(verifiers):
+                    raise ValueError(
+                        new_msg("Length of object (%d) does not match with "
+                                "length of fields (%d)" % (len(obj), len(verifiers))))
+                for v, (_, verifier) in zip(obj, verifiers):
+                    verifier(v)
+            elif hasattr(obj, "__dict__"):
+                d = obj.__dict__
+                for f, verifier in verifiers:
+                    verifier(d.get(f))
+            else:
+                raise TypeError(new_msg("StructType can not accept object %r in type %s"
+                                        % (obj, type(obj))))
+        verify_value = verify_struct
+
+    else:
+        def verify_default(obj):
+            assert_acceptable_types(obj)
+            verify_acceptable_types(obj)
+
+        verify_value = verify_default
+
+    def verify(obj):
+        if not verify_nullability(obj):
+            verify_value(obj)
+
+    return verify
+--------------------------------------------------
+
+--- SAMPLE #20 ---
+DOCSTRING: Convert Spark data type to pyarrow type
+CODE:
+def to_arrow_type(dt):
+    """ Convert Spark data type to pyarrow type
+    """
+    import pyarrow as pa
+    if type(dt) == BooleanType:
+        arrow_type = pa.bool_()
+    elif type(dt) == ByteType:
+        arrow_type = pa.int8()
+    elif type(dt) == ShortType:
+        arrow_type = pa.int16()
+    elif type(dt) == IntegerType:
+        arrow_type = pa.int32()
+    elif type(dt) == LongType:
+        arrow_type = pa.int64()
+    elif type(dt) == FloatType:
+        arrow_type = pa.float32()
+    elif type(dt) == DoubleType:
+        arrow_type = pa.float64()
+    elif type(dt) == DecimalType:
+        arrow_type = pa.decimal128(dt.precision, dt.scale)
+    elif type(dt) == StringType:
+        arrow_type = pa.string()
+    elif type(dt) == BinaryType:
+        arrow_type = pa.binary()
+    elif type(dt) == DateType:
+        arrow_type = pa.date32()
+    elif type(dt) == TimestampType:
+        # Timestamps should be in UTC, JVM Arrow timestamps require a timezone to be read
+        arrow_type = pa.timestamp('us', tz='UTC')
+    elif type(dt) == ArrayType:
+        if type(dt.elementType) in [StructType, TimestampType]:
+            raise TypeError("Unsupported type in conversion to Arrow: " + str(dt))
+        arrow_type = pa.list_(to_arrow_type(dt.elementType))
+    elif type(dt) == StructType:
+        if any(type(field.dataType) == StructType for field in dt):
+            raise TypeError("Nested StructType not supported in conversion to Arrow")
+        fields = [pa.field(field.name, to_arrow_type(field.dataType), nullable=field.nullable)
+                  for field in dt]
+        arrow_type = pa.struct(fields)
+    else:
+        raise TypeError("Unsupported type in conversion to Arrow: " + str(dt))
+    return arrow_type
+--------------------------------------------------
+
+--- SAMPLE #21 ---
+DOCSTRING: Convert a schema from Spark to Arrow
+CODE:
+def to_arrow_schema(schema):
+    """ Convert a schema from Spark to Arrow
+    """
+    import pyarrow as pa
+    fields = [pa.field(field.name, to_arrow_type(field.dataType), nullable=field.nullable)
+              for field in schema]
+    return pa.schema(fields)
+--------------------------------------------------
+
+--- SAMPLE #22 ---
+DOCSTRING: Convert pyarrow type to Spark data type.
+CODE:
+def from_arrow_type(at):
+    """ Convert pyarrow type to Spark data type.
+    """
+    import pyarrow.types as types
+    if types.is_boolean(at):
+        spark_type = BooleanType()
+    elif types.is_int8(at):
+        spark_type = ByteType()
+    elif types.is_int16(at):
+        spark_type = ShortType()
+    elif types.is_int32(at):
+        spark_type = IntegerType()
+    elif types.is_int64(at):
+        spark_type = LongType()
+    elif types.is_float32(at):
+        spark_type = FloatType()
+    elif types.is_float64(at):
+        spark_type = DoubleType()
+    elif types.is_decimal(at):
+        spark_type = DecimalType(precision=at.precision, scale=at.scale)
+    elif types.is_string(at):
+        spark_type = StringType()
+    elif types.is_binary(at):
+        spark_type = BinaryType()
+    elif types.is_date32(at):
+        spark_type = DateType()
+    elif types.is_timestamp(at):
+        spark_type = TimestampType()
+    elif types.is_list(at):
+        if types.is_timestamp(at.value_type):
+            raise TypeError("Unsupported type in conversion from Arrow: " + str(at))
+        spark_type = ArrayType(from_arrow_type(at.value_type))
+    elif types.is_struct(at):
+        if any(types.is_struct(field.type) for field in at):
+            raise TypeError("Nested StructType not supported in conversion from Arrow: " + str(at))
+        return StructType(
+            [StructField(field.name, from_arrow_type(field.type), nullable=field.nullable)
+             for field in at])
+    else:
+        raise TypeError("Unsupported type in conversion from Arrow: " + str(at))
+    return spark_type
+--------------------------------------------------
+
+--- SAMPLE #23 ---
+DOCSTRING: Convert schema from Arrow to Spark.
+CODE:
+def from_arrow_schema(arrow_schema):
+    """ Convert schema from Arrow to Spark.
+    """
+    return StructType(
+        [StructField(field.name, from_arrow_type(field.type), nullable=field.nullable)
+         for field in arrow_schema])
+--------------------------------------------------
+
+--- SAMPLE #24 ---
+DOCSTRING: Convert timezone aware timestamps to timezone-naive in the specified timezone or local timezone.
+
+    If the input series is not a timestamp series, then the same series is returned. If the input
+    series is a timestamp series, then a converted series is returned.
+
+    :param s: pandas.Series
+    :param timezone: the timezone to convert. if None then use local timezone
+    :return pandas.Series that have been converted to tz-naive
+CODE:
+def _check_series_localize_timestamps(s, timezone):
+    """
+    Convert timezone aware timestamps to timezone-naive in the specified timezone or local timezone.
+
+    If the input series is not a timestamp series, then the same series is returned. If the input
+    series is a timestamp series, then a converted series is returned.
+
+    :param s: pandas.Series
+    :param timezone: the timezone to convert. if None then use local timezone
+    :return pandas.Series that have been converted to tz-naive
+    """
+    from pyspark.sql.utils import require_minimum_pandas_version
+    require_minimum_pandas_version()
+
+    from pandas.api.types import is_datetime64tz_dtype
+    tz = timezone or _get_local_timezone()
+    # TODO: handle nested timestamps, such as ArrayType(TimestampType())?
+    if is_datetime64tz_dtype(s.dtype):
+        return s.dt.tz_convert(tz).dt.tz_localize(None)
+    else:
+        return s
+--------------------------------------------------
+
+--- SAMPLE #25 ---
+DOCSTRING: Convert timezone aware timestamps to timezone-naive in the specified timezone or local timezone
+
+    :param pdf: pandas.DataFrame
+    :param timezone: the timezone to convert. if None then use local timezone
+    :return pandas.DataFrame where any timezone aware columns have been converted to tz-naive
+CODE:
+def _check_dataframe_localize_timestamps(pdf, timezone):
+    """
+    Convert timezone aware timestamps to timezone-naive in the specified timezone or local timezone
+
+    :param pdf: pandas.DataFrame
+    :param timezone: the timezone to convert. if None then use local timezone
+    :return pandas.DataFrame where any timezone aware columns have been converted to tz-naive
+    """
+    from pyspark.sql.utils import require_minimum_pandas_version
+    require_minimum_pandas_version()
+
+    for column, series in pdf.iteritems():
+        pdf[column] = _check_series_localize_timestamps(series, timezone)
+    return pdf
+--------------------------------------------------
+
+--- SAMPLE #26 ---
+DOCSTRING: Convert a tz-naive timestamp in the specified timezone or local timezone to UTC normalized for
+    Spark internal storage
+
+    :param s: a pandas.Series
+    :param timezone: the timezone to convert. if None then use local timezone
+    :return pandas.Series where if it is a timestamp, has been UTC normalized without a time zone
+CODE:
+def _check_series_convert_timestamps_internal(s, timezone):
+    """
+    Convert a tz-naive timestamp in the specified timezone or local timezone to UTC normalized for
+    Spark internal storage
+
+    :param s: a pandas.Series
+    :param timezone: the timezone to convert. if None then use local timezone
+    :return pandas.Series where if it is a timestamp, has been UTC normalized without a time zone
+    """
+    from pyspark.sql.utils import require_minimum_pandas_version
+    require_minimum_pandas_version()
+
+    from pandas.api.types import is_datetime64_dtype, is_datetime64tz_dtype
+    # TODO: handle nested timestamps, such as ArrayType(TimestampType())?
+    if is_datetime64_dtype(s.dtype):
+        # When tz_localize a tz-naive timestamp, the result is ambiguous if the tz-naive
+        # timestamp is during the hour when the clock is adjusted backward during due to
+        # daylight saving time (dst).
+        # E.g., for America/New_York, the clock is adjusted backward on 2015-11-01 2:00 to
+        # 2015-11-01 1:00 from dst-time to standard time, and therefore, when tz_localize
+        # a tz-naive timestamp 2015-11-01 1:30 with America/New_York timezone, it can be either
+        # dst time (2015-01-01 1:30-0400) or standard time (2015-11-01 1:30-0500).
+        #
+        # Here we explicit choose to use standard time. This matches the default behavior of
+        # pytz.
+        #
+        # Here are some code to help understand this behavior:
+        # >>> import datetime
+        # >>> import pandas as pd
+        # >>> import pytz
+        # >>>
+        # >>> t = datetime.datetime(2015, 11, 1, 1, 30)
+        # >>> ts = pd.Series([t])
+        # >>> tz = pytz.timezone('America/New_York')
+        # >>>
+        # >>> ts.dt.tz_localize(tz, ambiguous=True)
+        # 0   2015-11-01 01:30:00-04:00
+        # dtype: datetime64[ns, America/New_York]
+        # >>>
+        # >>> ts.dt.tz_localize(tz, ambiguous=False)
+        # 0   2015-11-01 01:30:00-05:00
+        # dtype: datetime64[ns, America/New_York]
+        # >>>
+        # >>> str(tz.localize(t))
+        # '2015-11-01 01:30:00-05:00'
+        tz = timezone or _get_local_timezone()
+        return s.dt.tz_localize(tz, ambiguous=False).dt.tz_convert('UTC')
+    elif is_datetime64tz_dtype(s.dtype):
+        return s.dt.tz_convert('UTC')
+    else:
+        return s
+--------------------------------------------------
+
+--- SAMPLE #27 ---
+DOCSTRING: Convert timestamp to timezone-naive in the specified timezone or local timezone
+
+    :param s: a pandas.Series
+    :param from_timezone: the timezone to convert from. if None then use local timezone
+    :param to_timezone: the timezone to convert to. if None then use local timezone
+    :return pandas.Series where if it is a timestamp, has been converted to tz-naive
+CODE:
+def _check_series_convert_timestamps_localize(s, from_timezone, to_timezone):
+    """
+    Convert timestamp to timezone-naive in the specified timezone or local timezone
+
+    :param s: a pandas.Series
+    :param from_timezone: the timezone to convert from. if None then use local timezone
+    :param to_timezone: the timezone to convert to. if None then use local timezone
+    :return pandas.Series where if it is a timestamp, has been converted to tz-naive
+    """
+    from pyspark.sql.utils import require_minimum_pandas_version
+    require_minimum_pandas_version()
+
+    import pandas as pd
+    from pandas.api.types import is_datetime64tz_dtype, is_datetime64_dtype
+    from_tz = from_timezone or _get_local_timezone()
+    to_tz = to_timezone or _get_local_timezone()
+    # TODO: handle nested timestamps, such as ArrayType(TimestampType())?
+    if is_datetime64tz_dtype(s.dtype):
+        return s.dt.tz_convert(to_tz).dt.tz_localize(None)
+    elif is_datetime64_dtype(s.dtype) and from_tz != to_tz:
+        # `s.dt.tz_localize('tzlocal()')` doesn't work properly when including NaT.
+        return s.apply(
+            lambda ts: ts.tz_localize(from_tz, ambiguous=False).tz_convert(to_tz).tz_localize(None)
+            if ts is not pd.NaT else pd.NaT)
+    else:
+        return s
+--------------------------------------------------
+
+--- SAMPLE #28 ---
+DOCSTRING: Construct a StructType by adding new elements to it to define the schema. The method accepts
+        either:
+
+            a) A single parameter which is a StructField object.
+            b) Between 2 and 4 parameters as (name, data_type, nullable (optional),
+               metadata(optional). The data_type parameter may be either a String or a
+               DataType object.
+
+        >>> struct1 = StructType().add("f1", StringType(), True).add("f2", StringType(), True, None)
+        >>> struct2 = StructType([StructField("f1", StringType(), True), \\
+        ...     StructField("f2", StringType(), True, None)])
+        >>> struct1 == struct2
+        True
+        >>> struct1 = StructType().add(StructField("f1", StringType(), True))
+        >>> struct2 = StructType([StructField("f1", StringType(), True)])
+        >>> struct1 == struct2
+        True
+        >>> struct1 = StructType().add("f1", "string", True)
+        >>> struct2 = StructType([StructField("f1", StringType(), True)])
+        >>> struct1 == struct2
+        True
+
+        :param field: Either the name of the field or a StructField object
+        :param data_type: If present, the DataType of the StructField to create
+        :param nullable: Whether the field to add should be nullable (default True)
+        :param metadata: Any additional metadata (default None)
+        :return: a new updated StructType
+CODE:
+def add(self, field, data_type=None, nullable=True, metadata=None):
+        """
+        Construct a StructType by adding new elements to it to define the schema. The method accepts
+        either:
+
+            a) A single parameter which is a StructField object.
+            b) Between 2 and 4 parameters as (name, data_type, nullable (optional),
+               metadata(optional). The data_type parameter may be either a String or a
+               DataType object.
+
+        >>> struct1 = StructType().add("f1", StringType(), True).add("f2", StringType(), True, None)
+        >>> struct2 = StructType([StructField("f1", StringType(), True), \\
+        ...     StructField("f2", StringType(), True, None)])
+        >>> struct1 == struct2
+        True
+        >>> struct1 = StructType().add(StructField("f1", StringType(), True))
+        >>> struct2 = StructType([StructField("f1", StringType(), True)])
+        >>> struct1 == struct2
+        True
+        >>> struct1 = StructType().add("f1", "string", True)
+        >>> struct2 = StructType([StructField("f1", StringType(), True)])
+        >>> struct1 == struct2
+        True
+
+        :param field: Either the name of the field or a StructField object
+        :param data_type: If present, the DataType of the StructField to create
+        :param nullable: Whether the field to add should be nullable (default True)
+        :param metadata: Any additional metadata (default None)
+        :return: a new updated StructType
+        """
+        if isinstance(field, StructField):
+            self.fields.append(field)
+            self.names.append(field.name)
+        else:
+            if isinstance(field, str) and data_type is None:
+                raise ValueError("Must specify DataType if passing name of struct_field to create.")
+
+            if isinstance(data_type, str):
+                data_type_f = _parse_datatype_json_value(data_type)
+            else:
+                data_type_f = data_type
+            self.fields.append(StructField(field, data_type_f, nullable, metadata))
+            self.names.append(field)
+        # Precalculated list of fields that need conversion with fromInternal/toInternal functions
+        self._needConversion = [f.needConversion() for f in self]
+        self._needSerializeAnyField = any(self._needConversion)
+        return self
+--------------------------------------------------
+
+--- SAMPLE #29 ---
+DOCSTRING: Cache the sqlType() into class, because it's heavy used in `toInternal`.
+CODE:
+def _cachedSqlType(cls):
+        """
+        Cache the sqlType() into class, because it's heavy used in `toInternal`.
+        """
+        if not hasattr(cls, "_cached_sql_type"):
+            cls._cached_sql_type = cls.sqlType()
+        return cls._cached_sql_type
+--------------------------------------------------
+
+--- SAMPLE #30 ---
+DOCSTRING: Return as an dict
+
+        :param recursive: turns the nested Row as dict (default: False).
+
+        >>> Row(name="Alice", age=11).asDict() == {'name': 'Alice', 'age': 11}
+        True
+        >>> row = Row(key=1, value=Row(name='a', age=2))
+        >>> row.asDict() == {'key': 1, 'value': Row(age=2, name='a')}
+        True
+        >>> row.asDict(True) == {'key': 1, 'value': {'name': 'a', 'age': 2}}
+        True
+CODE:
+def asDict(self, recursive=False):
+        """
+        Return as an dict
+
+        :param recursive: turns the nested Row as dict (default: False).
+
+        >>> Row(name="Alice", age=11).asDict() == {'name': 'Alice', 'age': 11}
+        True
+        >>> row = Row(key=1, value=Row(name='a', age=2))
+        >>> row.asDict() == {'key': 1, 'value': Row(age=2, name='a')}
+        True
+        >>> row.asDict(True) == {'key': 1, 'value': {'name': 'a', 'age': 2}}
+        True
+        """
+        if not hasattr(self, "__fields__"):
+            raise TypeError("Cannot convert a Row class into dict")
+
+        if recursive:
+            def conv(obj):
+                if isinstance(obj, Row):
+                    return obj.asDict(True)
+                elif isinstance(obj, list):
+                    return [conv(o) for o in obj]
+                elif isinstance(obj, dict):
+                    return dict((k, conv(v)) for k, v in obj.items())
+                else:
+                    return obj
+            return dict(zip(self.__fields__, (conv(o) for o in self)))
+        else:
+            return dict(zip(self.__fields__, self))
+--------------------------------------------------
+
+--- SAMPLE #31 ---
+DOCSTRING: Gets summary (e.g. residuals, mse, r-squared ) of model on
+        training set. An exception is thrown if
+        `trainingSummary is None`.
+CODE:
+def summary(self):
+        """
+        Gets summary (e.g. residuals, mse, r-squared ) of model on
+        training set. An exception is thrown if
+        `trainingSummary is None`.
+        """
+        if self.hasSummary:
+            return LinearRegressionTrainingSummary(super(LinearRegressionModel, self).summary)
+        else:
+            raise RuntimeError("No training summary available for this %s" %
+                               self.__class__.__name__)
+--------------------------------------------------
+
+--- SAMPLE #32 ---
+DOCSTRING: Evaluates the model on a test dataset.
+
+        :param dataset:
+          Test dataset to evaluate model on, where dataset is an
+          instance of :py:class:`pyspark.sql.DataFrame`
+CODE:
+def evaluate(self, dataset):
+        """
+        Evaluates the model on a test dataset.
+
+        :param dataset:
+          Test dataset to evaluate model on, where dataset is an
+          instance of :py:class:`pyspark.sql.DataFrame`
+        """
+        if not isinstance(dataset, DataFrame):
+            raise ValueError("dataset must be a DataFrame but got %s." % type(dataset))
+        java_lr_summary = self._call_java("evaluate", dataset)
+        return LinearRegressionSummary(java_lr_summary)
+--------------------------------------------------
+
+--- SAMPLE #33 ---
+DOCSTRING: Gets summary (e.g. residuals, deviance, pValues) of model on
+        training set. An exception is thrown if
+        `trainingSummary is None`.
+CODE:
+def summary(self):
+        """
+        Gets summary (e.g. residuals, deviance, pValues) of model on
+        training set. An exception is thrown if
+        `trainingSummary is None`.
+        """
+        if self.hasSummary:
+            return GeneralizedLinearRegressionTrainingSummary(
+                super(GeneralizedLinearRegressionModel, self).summary)
+        else:
+            raise RuntimeError("No training summary available for this %s" %
+                               self.__class__.__name__)
+--------------------------------------------------
+
+--- SAMPLE #34 ---
+DOCSTRING: Evaluates the model on a test dataset.
+
+        :param dataset:
+          Test dataset to evaluate model on, where dataset is an
+          instance of :py:class:`pyspark.sql.DataFrame`
+CODE:
+def evaluate(self, dataset):
+        """
+        Evaluates the model on a test dataset.
+
+        :param dataset:
+          Test dataset to evaluate model on, where dataset is an
+          instance of :py:class:`pyspark.sql.DataFrame`
+        """
+        if not isinstance(dataset, DataFrame):
+            raise ValueError("dataset must be a DataFrame but got %s." % type(dataset))
+        java_glr_summary = self._call_java("evaluate", dataset)
+        return GeneralizedLinearRegressionSummary(java_glr_summary)
+--------------------------------------------------
+
+--- SAMPLE #35 ---
+DOCSTRING: Get all the directories
+CODE:
+def _get_local_dirs(sub):
+    """ Get all the directories """
+    path = os.environ.get("SPARK_LOCAL_DIRS", "/tmp")
+    dirs = path.split(",")
+    if len(dirs) > 1:
+        # different order in different processes and instances
+        rnd = random.Random(os.getpid() + id(dirs))
+        random.shuffle(dirs, rnd.random)
+    return [os.path.join(d, "python", str(os.getpid()), sub) for d in dirs]
+--------------------------------------------------
+
+--- SAMPLE #36 ---
+DOCSTRING: Choose one directory for spill by number n
+CODE:
+def _get_spill_dir(self, n):
+        """ Choose one directory for spill by number n """
+        return os.path.join(self.localdirs[n % len(self.localdirs)], str(n))
+--------------------------------------------------
+
+--- SAMPLE #37 ---
+DOCSTRING: Combine the items by creator and combiner
+CODE:
+def mergeValues(self, iterator):
+        """ Combine the items by creator and combiner """
+        # speedup attribute lookup
+        creator, comb = self.agg.createCombiner, self.agg.mergeValue
+        c, data, pdata, hfun, batch = 0, self.data, self.pdata, self._partition, self.batch
+        limit = self.memory_limit
+
+        for k, v in iterator:
+            d = pdata[hfun(k)] if pdata else data
+            d[k] = comb(d[k], v) if k in d else creator(v)
+
+            c += 1
+            if c >= batch:
+                if get_used_memory() >= limit:
+                    self._spill()
+                    limit = self._next_limit()
+                    batch /= 2
+                    c = 0
+                else:
+                    batch *= 1.5
+
+        if get_used_memory() >= limit:
+            self._spill()
+--------------------------------------------------
+
+--- SAMPLE #38 ---
+DOCSTRING: Merge (K,V) pair by mergeCombiner
+CODE:
+def mergeCombiners(self, iterator, limit=None):
+        """ Merge (K,V) pair by mergeCombiner """
+        if limit is None:
+            limit = self.memory_limit
+        # speedup attribute lookup
+        comb, hfun, objsize = self.agg.mergeCombiners, self._partition, self._object_size
+        c, data, pdata, batch = 0, self.data, self.pdata, self.batch
+        for k, v in iterator:
+            d = pdata[hfun(k)] if pdata else data
+            d[k] = comb(d[k], v) if k in d else v
+            if not limit:
+                continue
+
+            c += objsize(v)
+            if c > batch:
+                if get_used_memory() > limit:
+                    self._spill()
+                    limit = self._next_limit()
+                    batch /= 2
+                    c = 0
+                else:
+                    batch *= 1.5
+
+        if limit and get_used_memory() >= limit:
+            self._spill()
+--------------------------------------------------
+
+--- SAMPLE #39 ---
+DOCSTRING: dump already partitioned data into disks.
+
+        It will dump the data in batch for better performance.
+CODE:
+def _spill(self):
+        """
+        dump already partitioned data into disks.
+
+        It will dump the data in batch for better performance.
+        """
+        global MemoryBytesSpilled, DiskBytesSpilled
+        path = self._get_spill_dir(self.spills)
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        used_memory = get_used_memory()
+        if not self.pdata:
+            # The data has not been partitioned, it will iterator the
+            # dataset once, write them into different files, has no
+            # additional memory. It only called when the memory goes
+            # above limit at the first time.
+
+            # open all the files for writing
+            streams = [open(os.path.join(path, str(i)), 'wb')
+                       for i in range(self.partitions)]
+
+            for k, v in self.data.items():
+                h = self._partition(k)
+                # put one item in batch, make it compatible with load_stream
+                # it will increase the memory if dump them in batch
+                self.serializer.dump_stream([(k, v)], streams[h])
+
+            for s in streams:
+                DiskBytesSpilled += s.tell()
+                s.close()
+
+            self.data.clear()
+            self.pdata.extend([{} for i in range(self.partitions)])
+
+        else:
+            for i in range(self.partitions):
+                p = os.path.join(path, str(i))
+                with open(p, "wb") as f:
+                    # dump items in batch
+                    self.serializer.dump_stream(iter(self.pdata[i].items()), f)
+                self.pdata[i].clear()
+                DiskBytesSpilled += os.path.getsize(p)
+
+        self.spills += 1
+        gc.collect()  # release the memory as much as possible
+        MemoryBytesSpilled += max(used_memory - get_used_memory(), 0) << 20
+--------------------------------------------------
+
+--- SAMPLE #40 ---
+DOCSTRING: Return all merged items as iterator
+CODE:
+def items(self):
+        """ Return all merged items as iterator """
+        if not self.pdata and not self.spills:
+            return iter(self.data.items())
+        return self._external_items()
+--------------------------------------------------
+
+--- SAMPLE #41 ---
+DOCSTRING: Return all partitioned items as iterator
+CODE:
+def _external_items(self):
+        """ Return all partitioned items as iterator """
+        assert not self.data
+        if any(self.pdata):
+            self._spill()
+        # disable partitioning and spilling when merge combiners from disk
+        self.pdata = []
+
+        try:
+            for i in range(self.partitions):
+                for v in self._merged_items(i):
+                    yield v
+                self.data.clear()
+
+                # remove the merged partition
+                for j in range(self.spills):
+                    path = self._get_spill_dir(j)
+                    os.remove(os.path.join(path, str(i)))
+        finally:
+            self._cleanup()
+--------------------------------------------------
+
+--- SAMPLE #42 ---
+DOCSTRING: merge the partitioned items and return the as iterator
+
+        If one partition can not be fit in memory, then them will be
+        partitioned and merged recursively.
+CODE:
+def _recursive_merged_items(self, index):
+        """
+        merge the partitioned items and return the as iterator
+
+        If one partition can not be fit in memory, then them will be
+        partitioned and merged recursively.
+        """
+        subdirs = [os.path.join(d, "parts", str(index)) for d in self.localdirs]
+        m = ExternalMerger(self.agg, self.memory_limit, self.serializer, subdirs,
+                           self.scale * self.partitions, self.partitions, self.batch)
+        m.pdata = [{} for _ in range(self.partitions)]
+        limit = self._next_limit()
+
+        for j in range(self.spills):
+            path = self._get_spill_dir(j)
+            p = os.path.join(path, str(index))
+            with open(p, 'rb') as f:
+                m.mergeCombiners(self.serializer.load_stream(f), 0)
+
+            if get_used_memory() > limit:
+                m._spill()
+                limit = self._next_limit()
+
+        return m._external_items()
+--------------------------------------------------
+
+--- SAMPLE #43 ---
+DOCSTRING: Choose one directory for spill by number n
+CODE:
+def _get_path(self, n):
+        """ Choose one directory for spill by number n """
+        d = self.local_dirs[n % len(self.local_dirs)]
+        if not os.path.exists(d):
+            os.makedirs(d)
+        return os.path.join(d, str(n))
+--------------------------------------------------
+
+--- SAMPLE #44 ---
+DOCSTRING: Sort the elements in iterator, do external sort when the memory
+        goes above the limit.
+CODE:
+def sorted(self, iterator, key=None, reverse=False):
+        """
+        Sort the elements in iterator, do external sort when the memory
+        goes above the limit.
+        """
+        global MemoryBytesSpilled, DiskBytesSpilled
+        batch, limit = 100, self._next_limit()
+        chunks, current_chunk = [], []
+        iterator = iter(iterator)
+        while True:
+            # pick elements in batch
+            chunk = list(itertools.islice(iterator, batch))
+            current_chunk.extend(chunk)
+            if len(chunk) < batch:
+                break
+
+            used_memory = get_used_memory()
+            if used_memory > limit:
+                # sort them inplace will save memory
+                current_chunk.sort(key=key, reverse=reverse)
+                path = self._get_path(len(chunks))
+                with open(path, 'wb') as f:
+                    self.serializer.dump_stream(current_chunk, f)
+
+                def load(f):
+                    for v in self.serializer.load_stream(f):
+                        yield v
+                    # close the file explicit once we consume all the items
+                    # to avoid ResourceWarning in Python3
+                    f.close()
+                chunks.append(load(open(path, 'rb')))
+                current_chunk = []
+                MemoryBytesSpilled += max(used_memory - get_used_memory(), 0) << 20
+                DiskBytesSpilled += os.path.getsize(path)
+                os.unlink(path)  # data will be deleted after close
+
+            elif not chunks:
+                batch = min(int(batch * 1.5), 10000)
+
+        current_chunk.sort(key=key, reverse=reverse)
+        if not chunks:
+            return current_chunk
+
+        if current_chunk:
+            chunks.append(iter(current_chunk))
+
+        return heapq.merge(chunks, key=key, reverse=reverse)
+--------------------------------------------------
+
+--- SAMPLE #45 ---
+DOCSTRING: dump the values into disk
+CODE:
+def _spill(self):
+        """ dump the values into disk """
+        global MemoryBytesSpilled, DiskBytesSpilled
+        if self._file is None:
+            self._open_file()
+
+        used_memory = get_used_memory()
+        pos = self._file.tell()
+        self._ser.dump_stream(self.values, self._file)
+        self.values = []
+        gc.collect()
+        DiskBytesSpilled += self._file.tell() - pos
+        MemoryBytesSpilled += max(used_memory - get_used_memory(), 0) << 20
+--------------------------------------------------
+
+--- SAMPLE #46 ---
+DOCSTRING: dump already partitioned data into disks.
+CODE:
+def _spill(self):
+        """
+        dump already partitioned data into disks.
+        """
+        global MemoryBytesSpilled, DiskBytesSpilled
+        path = self._get_spill_dir(self.spills)
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        used_memory = get_used_memory()
+        if not self.pdata:
+            # The data has not been partitioned, it will iterator the
+            # data once, write them into different files, has no
+            # additional memory. It only called when the memory goes
+            # above limit at the first time.
+
+            # open all the files for writing
+            streams = [open(os.path.join(path, str(i)), 'wb')
+                       for i in range(self.partitions)]
+
+            # If the number of keys is small, then the overhead of sort is small
+            # sort them before dumping into disks
+            self._sorted = len(self.data) < self.SORT_KEY_LIMIT
+            if self._sorted:
+                self.serializer = self.flattened_serializer()
+                for k in sorted(self.data.keys()):
+                    h = self._partition(k)
+                    self.serializer.dump_stream([(k, self.data[k])], streams[h])
+            else:
+                for k, v in self.data.items():
+                    h = self._partition(k)
+                    self.serializer.dump_stream([(k, v)], streams[h])
+
+            for s in streams:
+                DiskBytesSpilled += s.tell()
+                s.close()
+
+            self.data.clear()
+            # self.pdata is cached in `mergeValues` and `mergeCombiners`
+            self.pdata.extend([{} for i in range(self.partitions)])
+
+        else:
+            for i in range(self.partitions):
+                p = os.path.join(path, str(i))
+                with open(p, "wb") as f:
+                    # dump items in batch
+                    if self._sorted:
+                        # sort by key only (stable)
+                        sorted_items = sorted(self.pdata[i].items(), key=operator.itemgetter(0))
+                        self.serializer.dump_stream(sorted_items, f)
+                    else:
+                        self.serializer.dump_stream(self.pdata[i].items(), f)
+                self.pdata[i].clear()
+                DiskBytesSpilled += os.path.getsize(p)
+
+        self.spills += 1
+        gc.collect()  # release the memory as much as possible
+        MemoryBytesSpilled += max(used_memory - get_used_memory(), 0) << 20
+--------------------------------------------------
+
+--- SAMPLE #47 ---
+DOCSTRING: load a partition from disk, then sort and group by key
+CODE:
+def _merge_sorted_items(self, index):
+        """ load a partition from disk, then sort and group by key """
+        def load_partition(j):
+            path = self._get_spill_dir(j)
+            p = os.path.join(path, str(index))
+            with open(p, 'rb', 65536) as f:
+                for v in self.serializer.load_stream(f):
+                    yield v
+
+        disk_items = [load_partition(j) for j in range(self.spills)]
+
+        if self._sorted:
+            # all the partitions are already sorted
+            sorted_items = heapq.merge(disk_items, key=operator.itemgetter(0))
+
+        else:
+            # Flatten the combined values, so it will not consume huge
+            # memory during merging sort.
+            ser = self.flattened_serializer()
+            sorter = ExternalSorter(self.memory_limit, ser)
+            sorted_items = sorter.sorted(itertools.chain(*disk_items),
+                                         key=operator.itemgetter(0))
+        return ((k, vs) for k, vs in GroupByKey(sorted_items))
+--------------------------------------------------
+
+--- SAMPLE #48 ---
+DOCSTRING: Called by a worker process after the fork().
+CODE:
+def worker(sock, authenticated):
+    """
+    Called by a worker process after the fork().
+    """
+    signal.signal(SIGHUP, SIG_DFL)
+    signal.signal(SIGCHLD, SIG_DFL)
+    signal.signal(SIGTERM, SIG_DFL)
+    # restore the handler for SIGINT,
+    # it's useful for debugging (show the stacktrace before exit)
+    signal.signal(SIGINT, signal.default_int_handler)
+
+    # Read the socket using fdopen instead of socket.makefile() because the latter
+    # seems to be very slow; note that we need to dup() the file descriptor because
+    # otherwise writes also cause a seek that makes us miss data on the read side.
+    infile = os.fdopen(os.dup(sock.fileno()), "rb", 65536)
+    outfile = os.fdopen(os.dup(sock.fileno()), "wb", 65536)
+
+    if not authenticated:
+        client_secret = UTF8Deserializer().loads(infile)
+        if os.environ["PYTHON_WORKER_FACTORY_SECRET"] == client_secret:
+            write_with_length("ok".encode("utf-8"), outfile)
+            outfile.flush()
+        else:
+            write_with_length("err".encode("utf-8"), outfile)
+            outfile.flush()
+            sock.close()
+            return 1
+
+    exit_code = 0
+    try:
+        worker_main(infile, outfile)
+    except SystemExit as exc:
+        exit_code = compute_real_exit_code(exc.code)
+    finally:
+        try:
+            outfile.flush()
+        except Exception:
+            pass
+    return exit_code
+--------------------------------------------------
+
+--- SAMPLE #49 ---
+DOCSTRING: This function returns consistent hash code for builtin types, especially
+    for None and tuple with None.
+
+    The algorithm is similar to that one used by CPython 2.7
+
+    >>> portable_hash(None)
+    0
+    >>> portable_hash((None, 1)) & 0xffffffff
+    219750521
+CODE:
+def portable_hash(x):
+    """
+    This function returns consistent hash code for builtin types, especially
+    for None and tuple with None.
+
+    The algorithm is similar to that one used by CPython 2.7
+
+    >>> portable_hash(None)
+    0
+    >>> portable_hash((None, 1)) & 0xffffffff
+    219750521
+    """
+
+    if sys.version_info >= (3, 2, 3) and 'PYTHONHASHSEED' not in os.environ:
+        raise Exception("Randomness of hash of string should be disabled via PYTHONHASHSEED")
+
+    if x is None:
+        return 0
+    if isinstance(x, tuple):
+        h = 0x345678
+        for i in x:
+            h ^= portable_hash(i)
+            h *= 1000003
+            h &= sys.maxsize
+        h ^= len(x)
+        if h == -1:
+            h = -2
+        return int(h)
+    return hash(x)
+--------------------------------------------------
+
+--- SAMPLE #50 ---
+DOCSTRING: Parse a memory string in the format supported by Java (e.g. 1g, 200m) and
+    return the value in MiB
+
+    >>> _parse_memory("256m")
+    256
+    >>> _parse_memory("2g")
+    2048
+CODE:
+def _parse_memory(s):
+    """
+    Parse a memory string in the format supported by Java (e.g. 1g, 200m) and
+    return the value in MiB
+
+    >>> _parse_memory("256m")
+    256
+    >>> _parse_memory("2g")
+    2048
+    """
+    units = {'g': 1024, 'm': 1, 't': 1 << 20, 'k': 1.0 / 1024}
+    if s[-1].lower() not in units:
+        raise ValueError("invalid format: " + s)
+    return int(float(s[:-1]) * units[s[-1].lower()])
+--------------------------------------------------
+
+--- SAMPLE #51 ---
+DOCSTRING: Ignore the 'u' prefix of string in doc tests, to make it works
+    in both python 2 and 3
+CODE:
+def ignore_unicode_prefix(f):
+    """
+    Ignore the 'u' prefix of string in doc tests, to make it works
+    in both python 2 and 3
+    """
+    if sys.version >= '3':
+        # the representation of unicode string in Python 3 does not have prefix 'u',
+        # so remove the prefix 'u' for doc tests
+        literal_re = re.compile(r"(\W|^)[uU](['])", re.UNICODE)
+        f.__doc__ = literal_re.sub(r'\1\2', f.__doc__)
+    return f
+--------------------------------------------------
+
+--- SAMPLE #52 ---
+DOCSTRING: Persist this RDD with the default storage level (C{MEMORY_ONLY}).
+CODE:
+def cache(self):
+        """
+        Persist this RDD with the default storage level (C{MEMORY_ONLY}).
+        """
+        self.is_cached = True
+        self.persist(StorageLevel.MEMORY_ONLY)
+        return self
+--------------------------------------------------
+
+--- SAMPLE #53 ---
+DOCSTRING: Set this RDD's storage level to persist its values across operations
+        after the first time it is computed. This can only be used to assign
+        a new storage level if the RDD does not have a storage level set yet.
+        If no storage level is specified defaults to (C{MEMORY_ONLY}).
+
+        >>> rdd = sc.parallelize(["b", "a", "c"])
+        >>> rdd.persist().is_cached
+        True
+CODE:
+def persist(self, storageLevel=StorageLevel.MEMORY_ONLY):
+        """
+        Set this RDD's storage level to persist its values across operations
+        after the first time it is computed. This can only be used to assign
+        a new storage level if the RDD does not have a storage level set yet.
+        If no storage level is specified defaults to (C{MEMORY_ONLY}).
+
+        >>> rdd = sc.parallelize(["b", "a", "c"])
+        >>> rdd.persist().is_cached
+        True
+        """
+        self.is_cached = True
+        javaStorageLevel = self.ctx._getJavaStorageLevel(storageLevel)
+        self._jrdd.persist(javaStorageLevel)
+        return self
+--------------------------------------------------
+
+--- SAMPLE #54 ---
+DOCSTRING: Mark the RDD as non-persistent, and remove all blocks for it from
+        memory and disk.
+
+        .. versionchanged:: 3.0.0
+           Added optional argument `blocking` to specify whether to block until all
+           blocks are deleted.
+CODE:
+def unpersist(self, blocking=False):
+        """
+        Mark the RDD as non-persistent, and remove all blocks for it from
+        memory and disk.
+
+        .. versionchanged:: 3.0.0
+           Added optional argument `blocking` to specify whether to block until all
+           blocks are deleted.
+        """
+        self.is_cached = False
+        self._jrdd.unpersist(blocking)
+        return self
+--------------------------------------------------
+
+--- SAMPLE #55 ---
+DOCSTRING: Gets the name of the file to which this RDD was checkpointed
+
+        Not defined if RDD is checkpointed locally.
+CODE:
+def getCheckpointFile(self):
+        """
+        Gets the name of the file to which this RDD was checkpointed
+
+        Not defined if RDD is checkpointed locally.
+        """
+        checkpointFile = self._jrdd.rdd().getCheckpointFile()
+        if checkpointFile.isDefined():
+            return checkpointFile.get()
+--------------------------------------------------
+
+--- SAMPLE #56 ---
+DOCSTRING: Return a new RDD by applying a function to each element of this RDD.
+
+        >>> rdd = sc.parallelize(["b", "a", "c"])
+        >>> sorted(rdd.map(lambda x: (x, 1)).collect())
+        [('a', 1), ('b', 1), ('c', 1)]
+CODE:
+def map(self, f, preservesPartitioning=False):
+        """
+        Return a new RDD by applying a function to each element of this RDD.
+
+        >>> rdd = sc.parallelize(["b", "a", "c"])
+        >>> sorted(rdd.map(lambda x: (x, 1)).collect())
+        [('a', 1), ('b', 1), ('c', 1)]
+        """
+        def func(_, iterator):
+            return map(fail_on_stopiteration(f), iterator)
+        return self.mapPartitionsWithIndex(func, preservesPartitioning)
+--------------------------------------------------
+
+--- SAMPLE #57 ---
+DOCSTRING: Return a new RDD by first applying a function to all elements of this
+        RDD, and then flattening the results.
+
+        >>> rdd = sc.parallelize([2, 3, 4])
+        >>> sorted(rdd.flatMap(lambda x: range(1, x)).collect())
+        [1, 1, 1, 2, 2, 3]
+        >>> sorted(rdd.flatMap(lambda x: [(x, x), (x, x)]).collect())
+        [(2, 2), (2, 2), (3, 3), (3, 3), (4, 4), (4, 4)]
+CODE:
+def flatMap(self, f, preservesPartitioning=False):
+        """
+        Return a new RDD by first applying a function to all elements of this
+        RDD, and then flattening the results.
+
+        >>> rdd = sc.parallelize([2, 3, 4])
+        >>> sorted(rdd.flatMap(lambda x: range(1, x)).collect())
+        [1, 1, 1, 2, 2, 3]
+        >>> sorted(rdd.flatMap(lambda x: [(x, x), (x, x)]).collect())
+        [(2, 2), (2, 2), (3, 3), (3, 3), (4, 4), (4, 4)]
+        """
+        def func(s, iterator):
+            return chain.from_iterable(map(fail_on_stopiteration(f), iterator))
+        return self.mapPartitionsWithIndex(func, preservesPartitioning)
+--------------------------------------------------
+
+--- SAMPLE #58 ---
+DOCSTRING: Return a new RDD by applying a function to each partition of this RDD.
+
+        >>> rdd = sc.parallelize([1, 2, 3, 4], 2)
+        >>> def f(iterator): yield sum(iterator)
+        >>> rdd.mapPartitions(f).collect()
+        [3, 7]
+CODE:
+def mapPartitions(self, f, preservesPartitioning=False):
+        """
+        Return a new RDD by applying a function to each partition of this RDD.
+
+        >>> rdd = sc.parallelize([1, 2, 3, 4], 2)
+        >>> def f(iterator): yield sum(iterator)
+        >>> rdd.mapPartitions(f).collect()
+        [3, 7]
+        """
+        def func(s, iterator):
+            return f(iterator)
+        return self.mapPartitionsWithIndex(func, preservesPartitioning)
+--------------------------------------------------
+
+--- SAMPLE #59 ---
+DOCSTRING: Deprecated: use mapPartitionsWithIndex instead.
+
+        Return a new RDD by applying a function to each partition of this RDD,
+        while tracking the index of the original partition.
+
+        >>> rdd = sc.parallelize([1, 2, 3, 4], 4)
+        >>> def f(splitIndex, iterator): yield splitIndex
+        >>> rdd.mapPartitionsWithSplit(f).sum()
+        6
+CODE:
+def mapPartitionsWithSplit(self, f, preservesPartitioning=False):
+        """
+        Deprecated: use mapPartitionsWithIndex instead.
+
+        Return a new RDD by applying a function to each partition of this RDD,
+        while tracking the index of the original partition.
+
+        >>> rdd = sc.parallelize([1, 2, 3, 4], 4)
+        >>> def f(splitIndex, iterator): yield splitIndex
+        >>> rdd.mapPartitionsWithSplit(f).sum()
+        6
+        """
+        warnings.warn("mapPartitionsWithSplit is deprecated; "
+                      "use mapPartitionsWithIndex instead", DeprecationWarning, stacklevel=2)
+        return self.mapPartitionsWithIndex(f, preservesPartitioning)
+--------------------------------------------------
+
+--- SAMPLE #60 ---
+DOCSTRING: Return a new RDD containing the distinct elements in this RDD.
+
+        >>> sorted(sc.parallelize([1, 1, 2, 3]).distinct().collect())
+        [1, 2, 3]
+CODE:
+def distinct(self, numPartitions=None):
+        """
+        Return a new RDD containing the distinct elements in this RDD.
+
+        >>> sorted(sc.parallelize([1, 1, 2, 3]).distinct().collect())
+        [1, 2, 3]
+        """
+        return self.map(lambda x: (x, None)) \
+                   .reduceByKey(lambda x, _: x, numPartitions) \
+                   .map(lambda x: x[0])
+--------------------------------------------------
+
+--- SAMPLE #61 ---
+DOCSTRING: Return a sampled subset of this RDD.
+
+        :param withReplacement: can elements be sampled multiple times (replaced when sampled out)
+        :param fraction: expected size of the sample as a fraction of this RDD's size
+            without replacement: probability that each element is chosen; fraction must be [0, 1]
+            with replacement: expected number of times each element is chosen; fraction must be >= 0
+        :param seed: seed for the random number generator
+
+        .. note:: This is not guaranteed to provide exactly the fraction specified of the total
+            count of the given :class:`DataFrame`.
+
+        >>> rdd = sc.parallelize(range(100), 4)
+        >>> 6 <= rdd.sample(False, 0.1, 81).count() <= 14
+        True
+CODE:
+def sample(self, withReplacement, fraction, seed=None):
+        """
+        Return a sampled subset of this RDD.
+
+        :param withReplacement: can elements be sampled multiple times (replaced when sampled out)
+        :param fraction: expected size of the sample as a fraction of this RDD's size
+            without replacement: probability that each element is chosen; fraction must be [0, 1]
+            with replacement: expected number of times each element is chosen; fraction must be >= 0
+        :param seed: seed for the random number generator
+
+        .. note:: This is not guaranteed to provide exactly the fraction specified of the total
+            count of the given :class:`DataFrame`.
+
+        >>> rdd = sc.parallelize(range(100), 4)
+        >>> 6 <= rdd.sample(False, 0.1, 81).count() <= 14
+        True
+        """
+        assert fraction >= 0.0, "Negative fraction value: %s" % fraction
+        return self.mapPartitionsWithIndex(RDDSampler(withReplacement, fraction, seed).func, True)
+--------------------------------------------------
+
+--- SAMPLE #62 ---
+DOCSTRING: Randomly splits this RDD with the provided weights.
+
+        :param weights: weights for splits, will be normalized if they don't sum to 1
+        :param seed: random seed
+        :return: split RDDs in a list
+
+        >>> rdd = sc.parallelize(range(500), 1)
+        >>> rdd1, rdd2 = rdd.randomSplit([2, 3], 17)
+        >>> len(rdd1.collect() + rdd2.collect())
+        500
+        >>> 150 < rdd1.count() < 250
+        True
+        >>> 250 < rdd2.count() < 350
+        True
+CODE:
+def randomSplit(self, weights, seed=None):
+        """
+        Randomly splits this RDD with the provided weights.
+
+        :param weights: weights for splits, will be normalized if they don't sum to 1
+        :param seed: random seed
+        :return: split RDDs in a list
+
+        >>> rdd = sc.parallelize(range(500), 1)
+        >>> rdd1, rdd2 = rdd.randomSplit([2, 3], 17)
+        >>> len(rdd1.collect() + rdd2.collect())
+        500
+        >>> 150 < rdd1.count() < 250
+        True
+        >>> 250 < rdd2.count() < 350
+        True
+        """
+        s = float(sum(weights))
+        cweights = [0.0]
+        for w in weights:
+            cweights.append(cweights[-1] + w / s)
+        if seed is None:
+            seed = random.randint(0, 2 ** 32 - 1)
+        return [self.mapPartitionsWithIndex(RDDRangeSampler(lb, ub, seed).func, True)
+                for lb, ub in zip(cweights, cweights[1:])]
+--------------------------------------------------
+
+--- SAMPLE #63 ---
+DOCSTRING: Return a fixed-size sampled subset of this RDD.
+
+        .. note:: This method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+
+        >>> rdd = sc.parallelize(range(0, 10))
+        >>> len(rdd.takeSample(True, 20, 1))
+        20
+        >>> len(rdd.takeSample(False, 5, 2))
+        5
+        >>> len(rdd.takeSample(False, 15, 3))
+        10
+CODE:
+def takeSample(self, withReplacement, num, seed=None):
+        """
+        Return a fixed-size sampled subset of this RDD.
+
+        .. note:: This method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+
+        >>> rdd = sc.parallelize(range(0, 10))
+        >>> len(rdd.takeSample(True, 20, 1))
+        20
+        >>> len(rdd.takeSample(False, 5, 2))
+        5
+        >>> len(rdd.takeSample(False, 15, 3))
+        10
+        """
+        numStDev = 10.0
+
+        if num < 0:
+            raise ValueError("Sample size cannot be negative.")
+        elif num == 0:
+            return []
+
+        initialCount = self.count()
+        if initialCount == 0:
+            return []
+
+        rand = random.Random(seed)
+
+        if (not withReplacement) and num >= initialCount:
+            # shuffle current RDD and return
+            samples = self.collect()
+            rand.shuffle(samples)
+            return samples
+
+        maxSampleSize = sys.maxsize - int(numStDev * sqrt(sys.maxsize))
+        if num > maxSampleSize:
+            raise ValueError(
+                "Sample size cannot be greater than %d." % maxSampleSize)
+
+        fraction = RDD._computeFractionForSampleSize(
+            num, initialCount, withReplacement)
+        samples = self.sample(withReplacement, fraction, seed).collect()
+
+        # If the first sample didn't turn out large enough, keep trying to take samples;
+        # this shouldn't happen often because we use a big multiplier for their initial size.
+        # See: scala/spark/RDD.scala
+        while len(samples) < num:
+            # TODO: add log warning for when more than one iteration was run
+            seed = rand.randint(0, sys.maxsize)
+            samples = self.sample(withReplacement, fraction, seed).collect()
+
+        rand.shuffle(samples)
+
+        return samples[0:num]
+--------------------------------------------------
+
+--- SAMPLE #64 ---
+DOCSTRING: Returns a sampling rate that guarantees a sample of
+        size >= sampleSizeLowerBound 99.99% of the time.
+
+        How the sampling rate is determined:
+        Let p = num / total, where num is the sample size and total is the
+        total number of data points in the RDD. We're trying to compute
+        q > p such that
+          - when sampling with replacement, we're drawing each data point
+            with prob_i ~ Pois(q), where we want to guarantee
+            Pr[s < num] < 0.0001 for s = sum(prob_i for i from 0 to
+            total), i.e. the failure rate of not having a sufficiently large
+            sample < 0.0001. Setting q = p + 5 * sqrt(p/total) is sufficient
+            to guarantee 0.9999 success rate for num > 12, but we need a
+            slightly larger q (9 empirically determined).
+          - when sampling without replacement, we're drawing each data point
+            with prob_i ~ Binomial(total, fraction) and our choice of q
+            guarantees 1-delta, or 0.9999 success rate, where success rate is
+            defined the same as in sampling with replacement.
+CODE:
+def _computeFractionForSampleSize(sampleSizeLowerBound, total, withReplacement):
+        """
+        Returns a sampling rate that guarantees a sample of
+        size >= sampleSizeLowerBound 99.99% of the time.
+
+        How the sampling rate is determined:
+        Let p = num / total, where num is the sample size and total is the
+        total number of data points in the RDD. We're trying to compute
+        q > p such that
+          - when sampling with replacement, we're drawing each data point
+            with prob_i ~ Pois(q), where we want to guarantee
+            Pr[s < num] < 0.0001 for s = sum(prob_i for i from 0 to
+            total), i.e. the failure rate of not having a sufficiently large
+            sample < 0.0001. Setting q = p + 5 * sqrt(p/total) is sufficient
+            to guarantee 0.9999 success rate for num > 12, but we need a
+            slightly larger q (9 empirically determined).
+          - when sampling without replacement, we're drawing each data point
+            with prob_i ~ Binomial(total, fraction) and our choice of q
+            guarantees 1-delta, or 0.9999 success rate, where success rate is
+            defined the same as in sampling with replacement.
+        """
+        fraction = float(sampleSizeLowerBound) / total
+        if withReplacement:
+            numStDev = 5
+            if (sampleSizeLowerBound < 12):
+                numStDev = 9
+            return fraction + numStDev * sqrt(fraction / total)
+        else:
+            delta = 0.00005
+            gamma = - log(delta) / total
+            return min(1, fraction + gamma + sqrt(gamma * gamma + 2 * gamma * fraction))
+--------------------------------------------------
+
+--- SAMPLE #65 ---
+DOCSTRING: Return the union of this RDD and another one.
+
+        >>> rdd = sc.parallelize([1, 1, 2, 3])
+        >>> rdd.union(rdd).collect()
+        [1, 1, 2, 3, 1, 1, 2, 3]
+CODE:
+def union(self, other):
+        """
+        Return the union of this RDD and another one.
+
+        >>> rdd = sc.parallelize([1, 1, 2, 3])
+        >>> rdd.union(rdd).collect()
+        [1, 1, 2, 3, 1, 1, 2, 3]
+        """
+        if self._jrdd_deserializer == other._jrdd_deserializer:
+            rdd = RDD(self._jrdd.union(other._jrdd), self.ctx,
+                      self._jrdd_deserializer)
+        else:
+            # These RDDs contain data in different serialized formats, so we
+            # must normalize them to the default serializer.
+            self_copy = self._reserialize()
+            other_copy = other._reserialize()
+            rdd = RDD(self_copy._jrdd.union(other_copy._jrdd), self.ctx,
+                      self.ctx.serializer)
+        if (self.partitioner == other.partitioner and
+                self.getNumPartitions() == rdd.getNumPartitions()):
+            rdd.partitioner = self.partitioner
+        return rdd
+--------------------------------------------------
+
+--- SAMPLE #66 ---
+DOCSTRING: Return the intersection of this RDD and another one. The output will
+        not contain any duplicate elements, even if the input RDDs did.
+
+        .. note:: This method performs a shuffle internally.
+
+        >>> rdd1 = sc.parallelize([1, 10, 2, 3, 4, 5])
+        >>> rdd2 = sc.parallelize([1, 6, 2, 3, 7, 8])
+        >>> rdd1.intersection(rdd2).collect()
+        [1, 2, 3]
+CODE:
+def intersection(self, other):
+        """
+        Return the intersection of this RDD and another one. The output will
+        not contain any duplicate elements, even if the input RDDs did.
+
+        .. note:: This method performs a shuffle internally.
+
+        >>> rdd1 = sc.parallelize([1, 10, 2, 3, 4, 5])
+        >>> rdd2 = sc.parallelize([1, 6, 2, 3, 7, 8])
+        >>> rdd1.intersection(rdd2).collect()
+        [1, 2, 3]
+        """
+        return self.map(lambda v: (v, None)) \
+            .cogroup(other.map(lambda v: (v, None))) \
+            .filter(lambda k_vs: all(k_vs[1])) \
+            .keys()
+--------------------------------------------------
+
+--- SAMPLE #67 ---
+DOCSTRING: Repartition the RDD according to the given partitioner and, within each resulting partition,
+        sort records by their keys.
+
+        >>> rdd = sc.parallelize([(0, 5), (3, 8), (2, 6), (0, 8), (3, 8), (1, 3)])
+        >>> rdd2 = rdd.repartitionAndSortWithinPartitions(2, lambda x: x % 2, True)
+        >>> rdd2.glom().collect()
+        [[(0, 5), (0, 8), (2, 6)], [(1, 3), (3, 8), (3, 8)]]
+CODE:
+def repartitionAndSortWithinPartitions(self, numPartitions=None, partitionFunc=portable_hash,
+                                           ascending=True, keyfunc=lambda x: x):
+        """
+        Repartition the RDD according to the given partitioner and, within each resulting partition,
+        sort records by their keys.
+
+        >>> rdd = sc.parallelize([(0, 5), (3, 8), (2, 6), (0, 8), (3, 8), (1, 3)])
+        >>> rdd2 = rdd.repartitionAndSortWithinPartitions(2, lambda x: x % 2, True)
+        >>> rdd2.glom().collect()
+        [[(0, 5), (0, 8), (2, 6)], [(1, 3), (3, 8), (3, 8)]]
+        """
+        if numPartitions is None:
+            numPartitions = self._defaultReducePartitions()
+
+        memory = _parse_memory(self.ctx._conf.get("spark.python.worker.memory", "512m"))
+        serializer = self._jrdd_deserializer
+
+        def sortPartition(iterator):
+            sort = ExternalSorter(memory * 0.9, serializer).sorted
+            return iter(sort(iterator, key=lambda k_v: keyfunc(k_v[0]), reverse=(not ascending)))
+
+        return self.partitionBy(numPartitions, partitionFunc).mapPartitions(sortPartition, True)
+--------------------------------------------------
+
+--- SAMPLE #68 ---
+DOCSTRING: Sorts this RDD, which is assumed to consist of (key, value) pairs.
+
+        >>> tmp = [('a', 1), ('b', 2), ('1', 3), ('d', 4), ('2', 5)]
+        >>> sc.parallelize(tmp).sortByKey().first()
+        ('1', 3)
+        >>> sc.parallelize(tmp).sortByKey(True, 1).collect()
+        [('1', 3), ('2', 5), ('a', 1), ('b', 2), ('d', 4)]
+        >>> sc.parallelize(tmp).sortByKey(True, 2).collect()
+        [('1', 3), ('2', 5), ('a', 1), ('b', 2), ('d', 4)]
+        >>> tmp2 = [('Mary', 1), ('had', 2), ('a', 3), ('little', 4), ('lamb', 5)]
+        >>> tmp2.extend([('whose', 6), ('fleece', 7), ('was', 8), ('white', 9)])
+        >>> sc.parallelize(tmp2).sortByKey(True, 3, keyfunc=lambda k: k.lower()).collect()
+        [('a', 3), ('fleece', 7), ('had', 2), ('lamb', 5),...('white', 9), ('whose', 6)]
+CODE:
+def sortByKey(self, ascending=True, numPartitions=None, keyfunc=lambda x: x):
+        """
+        Sorts this RDD, which is assumed to consist of (key, value) pairs.
+
+        >>> tmp = [('a', 1), ('b', 2), ('1', 3), ('d', 4), ('2', 5)]
+        >>> sc.parallelize(tmp).sortByKey().first()
+        ('1', 3)
+        >>> sc.parallelize(tmp).sortByKey(True, 1).collect()
+        [('1', 3), ('2', 5), ('a', 1), ('b', 2), ('d', 4)]
+        >>> sc.parallelize(tmp).sortByKey(True, 2).collect()
+        [('1', 3), ('2', 5), ('a', 1), ('b', 2), ('d', 4)]
+        >>> tmp2 = [('Mary', 1), ('had', 2), ('a', 3), ('little', 4), ('lamb', 5)]
+        >>> tmp2.extend([('whose', 6), ('fleece', 7), ('was', 8), ('white', 9)])
+        >>> sc.parallelize(tmp2).sortByKey(True, 3, keyfunc=lambda k: k.lower()).collect()
+        [('a', 3), ('fleece', 7), ('had', 2), ('lamb', 5),...('white', 9), ('whose', 6)]
+        """
+        if numPartitions is None:
+            numPartitions = self._defaultReducePartitions()
+
+        memory = self._memory_limit()
+        serializer = self._jrdd_deserializer
+
+        def sortPartition(iterator):
+            sort = ExternalSorter(memory * 0.9, serializer).sorted
+            return iter(sort(iterator, key=lambda kv: keyfunc(kv[0]), reverse=(not ascending)))
+
+        if numPartitions == 1:
+            if self.getNumPartitions() > 1:
+                self = self.coalesce(1)
+            return self.mapPartitions(sortPartition, True)
+
+        # first compute the boundary of each part via sampling: we want to partition
+        # the key-space into bins such that the bins have roughly the same
+        # number of (key, value) pairs falling into them
+        rddSize = self.count()
+        if not rddSize:
+            return self  # empty RDD
+        maxSampleSize = numPartitions * 20.0  # constant from Spark's RangePartitioner
+        fraction = min(maxSampleSize / max(rddSize, 1), 1.0)
+        samples = self.sample(False, fraction, 1).map(lambda kv: kv[0]).collect()
+        samples = sorted(samples, key=keyfunc)
+
+        # we have numPartitions many parts but one of the them has
+        # an implicit boundary
+        bounds = [samples[int(len(samples) * (i + 1) / numPartitions)]
+                  for i in range(0, numPartitions - 1)]
+
+        def rangePartitioner(k):
+            p = bisect.bisect_left(bounds, keyfunc(k))
+            if ascending:
+                return p
+            else:
+                return numPartitions - 1 - p
+
+        return self.partitionBy(numPartitions, rangePartitioner).mapPartitions(sortPartition, True)
+--------------------------------------------------
+
+--- SAMPLE #69 ---
+DOCSTRING: Sorts this RDD by the given keyfunc
+
+        >>> tmp = [('a', 1), ('b', 2), ('1', 3), ('d', 4), ('2', 5)]
+        >>> sc.parallelize(tmp).sortBy(lambda x: x[0]).collect()
+        [('1', 3), ('2', 5), ('a', 1), ('b', 2), ('d', 4)]
+        >>> sc.parallelize(tmp).sortBy(lambda x: x[1]).collect()
+        [('a', 1), ('b', 2), ('1', 3), ('d', 4), ('2', 5)]
+CODE:
+def sortBy(self, keyfunc, ascending=True, numPartitions=None):
+        """
+        Sorts this RDD by the given keyfunc
+
+        >>> tmp = [('a', 1), ('b', 2), ('1', 3), ('d', 4), ('2', 5)]
+        >>> sc.parallelize(tmp).sortBy(lambda x: x[0]).collect()
+        [('1', 3), ('2', 5), ('a', 1), ('b', 2), ('d', 4)]
+        >>> sc.parallelize(tmp).sortBy(lambda x: x[1]).collect()
+        [('a', 1), ('b', 2), ('1', 3), ('d', 4), ('2', 5)]
+        """
+        return self.keyBy(keyfunc).sortByKey(ascending, numPartitions).values()
+--------------------------------------------------
+
+--- SAMPLE #70 ---
+DOCSTRING: Return the Cartesian product of this RDD and another one, that is, the
+        RDD of all pairs of elements C{(a, b)} where C{a} is in C{self} and
+        C{b} is in C{other}.
+
+        >>> rdd = sc.parallelize([1, 2])
+        >>> sorted(rdd.cartesian(rdd).collect())
+        [(1, 1), (1, 2), (2, 1), (2, 2)]
+CODE:
+def cartesian(self, other):
+        """
+        Return the Cartesian product of this RDD and another one, that is, the
+        RDD of all pairs of elements C{(a, b)} where C{a} is in C{self} and
+        C{b} is in C{other}.
+
+        >>> rdd = sc.parallelize([1, 2])
+        >>> sorted(rdd.cartesian(rdd).collect())
+        [(1, 1), (1, 2), (2, 1), (2, 2)]
+        """
+        # Due to batching, we can't use the Java cartesian method.
+        deserializer = CartesianDeserializer(self._jrdd_deserializer,
+                                             other._jrdd_deserializer)
+        return RDD(self._jrdd.cartesian(other._jrdd), self.ctx, deserializer)
+--------------------------------------------------
+
+--- SAMPLE #71 ---
+DOCSTRING: Return an RDD of grouped items.
+
+        >>> rdd = sc.parallelize([1, 1, 2, 3, 5, 8])
+        >>> result = rdd.groupBy(lambda x: x % 2).collect()
+        >>> sorted([(x, sorted(y)) for (x, y) in result])
+        [(0, [2, 8]), (1, [1, 1, 3, 5])]
+CODE:
+def groupBy(self, f, numPartitions=None, partitionFunc=portable_hash):
+        """
+        Return an RDD of grouped items.
+
+        >>> rdd = sc.parallelize([1, 1, 2, 3, 5, 8])
+        >>> result = rdd.groupBy(lambda x: x % 2).collect()
+        >>> sorted([(x, sorted(y)) for (x, y) in result])
+        [(0, [2, 8]), (1, [1, 1, 3, 5])]
+        """
+        return self.map(lambda x: (f(x), x)).groupByKey(numPartitions, partitionFunc)
+--------------------------------------------------
+
+--- SAMPLE #72 ---
+DOCSTRING: Return an RDD created by piping elements to a forked external process.
+
+        >>> sc.parallelize(['1', '2', '', '3']).pipe('cat').collect()
+        [u'1', u'2', u'', u'3']
+
+        :param checkCode: whether or not to check the return value of the shell command.
+CODE:
+def pipe(self, command, env=None, checkCode=False):
+        """
+        Return an RDD created by piping elements to a forked external process.
+
+        >>> sc.parallelize(['1', '2', '', '3']).pipe('cat').collect()
+        [u'1', u'2', u'', u'3']
+
+        :param checkCode: whether or not to check the return value of the shell command.
+        """
+        if env is None:
+            env = dict()
+
+        def func(iterator):
+            pipe = Popen(
+                shlex.split(command), env=env, stdin=PIPE, stdout=PIPE)
+
+            def pipe_objs(out):
+                for obj in iterator:
+                    s = unicode(obj).rstrip('\n') + '\n'
+                    out.write(s.encode('utf-8'))
+                out.close()
+            Thread(target=pipe_objs, args=[pipe.stdin]).start()
+
+            def check_return_code():
+                pipe.wait()
+                if checkCode and pipe.returncode:
+                    raise Exception("Pipe function `%s' exited "
+                                    "with error code %d" % (command, pipe.returncode))
+                else:
+                    for i in range(0):
+                        yield i
+            return (x.rstrip(b'\n').decode('utf-8') for x in
+                    chain(iter(pipe.stdout.readline, b''), check_return_code()))
+        return self.mapPartitions(func)
+--------------------------------------------------
+
+--- SAMPLE #73 ---
+DOCSTRING: Applies a function to all elements of this RDD.
+
+        >>> def f(x): print(x)
+        >>> sc.parallelize([1, 2, 3, 4, 5]).foreach(f)
+CODE:
+def foreach(self, f):
+        """
+        Applies a function to all elements of this RDD.
+
+        >>> def f(x): print(x)
+        >>> sc.parallelize([1, 2, 3, 4, 5]).foreach(f)
+        """
+        f = fail_on_stopiteration(f)
+
+        def processPartition(iterator):
+            for x in iterator:
+                f(x)
+            return iter([])
+        self.mapPartitions(processPartition).count()
+--------------------------------------------------
+
+--- SAMPLE #74 ---
+DOCSTRING: Applies a function to each partition of this RDD.
+
+        >>> def f(iterator):
+        ...     for x in iterator:
+        ...          print(x)
+        >>> sc.parallelize([1, 2, 3, 4, 5]).foreachPartition(f)
+CODE:
+def foreachPartition(self, f):
+        """
+        Applies a function to each partition of this RDD.
+
+        >>> def f(iterator):
+        ...     for x in iterator:
+        ...          print(x)
+        >>> sc.parallelize([1, 2, 3, 4, 5]).foreachPartition(f)
+        """
+        def func(it):
+            r = f(it)
+            try:
+                return iter(r)
+            except TypeError:
+                return iter([])
+        self.mapPartitions(func).count()
+--------------------------------------------------
+
+--- SAMPLE #75 ---
+DOCSTRING: Return a list that contains all of the elements in this RDD.
+
+        .. note:: This method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+CODE:
+def collect(self):
+        """
+        Return a list that contains all of the elements in this RDD.
+
+        .. note:: This method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+        """
+        with SCCallSiteSync(self.context) as css:
+            sock_info = self.ctx._jvm.PythonRDD.collectAndServe(self._jrdd.rdd())
+        return list(_load_from_socket(sock_info, self._jrdd_deserializer))
+--------------------------------------------------
+
+--- SAMPLE #76 ---
+DOCSTRING: Reduces the elements of this RDD using the specified commutative and
+        associative binary operator. Currently reduces partitions locally.
+
+        >>> from operator import add
+        >>> sc.parallelize([1, 2, 3, 4, 5]).reduce(add)
+        15
+        >>> sc.parallelize((2 for _ in range(10))).map(lambda x: 1).cache().reduce(add)
+        10
+        >>> sc.parallelize([]).reduce(add)
+        Traceback (most recent call last):
+            ...
+        ValueError: Can not reduce() empty RDD
+CODE:
+def reduce(self, f):
+        """
+        Reduces the elements of this RDD using the specified commutative and
+        associative binary operator. Currently reduces partitions locally.
+
+        >>> from operator import add
+        >>> sc.parallelize([1, 2, 3, 4, 5]).reduce(add)
+        15
+        >>> sc.parallelize((2 for _ in range(10))).map(lambda x: 1).cache().reduce(add)
+        10
+        >>> sc.parallelize([]).reduce(add)
+        Traceback (most recent call last):
+            ...
+        ValueError: Can not reduce() empty RDD
+        """
+        f = fail_on_stopiteration(f)
+
+        def func(iterator):
+            iterator = iter(iterator)
+            try:
+                initial = next(iterator)
+            except StopIteration:
+                return
+            yield reduce(f, iterator, initial)
+
+        vals = self.mapPartitions(func).collect()
+        if vals:
+            return reduce(f, vals)
+        raise ValueError("Can not reduce() empty RDD")
+--------------------------------------------------
+
+--- SAMPLE #77 ---
+DOCSTRING: Reduces the elements of this RDD in a multi-level tree pattern.
+
+        :param depth: suggested depth of the tree (default: 2)
+
+        >>> add = lambda x, y: x + y
+        >>> rdd = sc.parallelize([-5, -4, -3, -2, -1, 1, 2, 3, 4], 10)
+        >>> rdd.treeReduce(add)
+        -5
+        >>> rdd.treeReduce(add, 1)
+        -5
+        >>> rdd.treeReduce(add, 2)
+        -5
+        >>> rdd.treeReduce(add, 5)
+        -5
+        >>> rdd.treeReduce(add, 10)
+        -5
+CODE:
+def treeReduce(self, f, depth=2):
+        """
+        Reduces the elements of this RDD in a multi-level tree pattern.
+
+        :param depth: suggested depth of the tree (default: 2)
+
+        >>> add = lambda x, y: x + y
+        >>> rdd = sc.parallelize([-5, -4, -3, -2, -1, 1, 2, 3, 4], 10)
+        >>> rdd.treeReduce(add)
+        -5
+        >>> rdd.treeReduce(add, 1)
+        -5
+        >>> rdd.treeReduce(add, 2)
+        -5
+        >>> rdd.treeReduce(add, 5)
+        -5
+        >>> rdd.treeReduce(add, 10)
+        -5
+        """
+        if depth < 1:
+            raise ValueError("Depth cannot be smaller than 1 but got %d." % depth)
+
+        zeroValue = None, True  # Use the second entry to indicate whether this is a dummy value.
+
+        def op(x, y):
+            if x[1]:
+                return y
+            elif y[1]:
+                return x
+            else:
+                return f(x[0], y[0]), False
+
+        reduced = self.map(lambda x: (x, False)).treeAggregate(zeroValue, op, op, depth)
+        if reduced[1]:
+            raise ValueError("Cannot reduce empty RDD.")
+        return reduced[0]
+--------------------------------------------------
+
+--- SAMPLE #78 ---
+DOCSTRING: Aggregate the elements of each partition, and then the results for all
+        the partitions, using a given associative function and a neutral "zero value."
+
+        The function C{op(t1, t2)} is allowed to modify C{t1} and return it
+        as its result value to avoid object allocation; however, it should not
+        modify C{t2}.
+
+        This behaves somewhat differently from fold operations implemented
+        for non-distributed collections in functional languages like Scala.
+        This fold operation may be applied to partitions individually, and then
+        fold those results into the final result, rather than apply the fold
+        to each element sequentially in some defined ordering. For functions
+        that are not commutative, the result may differ from that of a fold
+        applied to a non-distributed collection.
+
+        >>> from operator import add
+        >>> sc.parallelize([1, 2, 3, 4, 5]).fold(0, add)
+        15
+CODE:
+def fold(self, zeroValue, op):
+        """
+        Aggregate the elements of each partition, and then the results for all
+        the partitions, using a given associative function and a neutral "zero value."
+
+        The function C{op(t1, t2)} is allowed to modify C{t1} and return it
+        as its result value to avoid object allocation; however, it should not
+        modify C{t2}.
+
+        This behaves somewhat differently from fold operations implemented
+        for non-distributed collections in functional languages like Scala.
+        This fold operation may be applied to partitions individually, and then
+        fold those results into the final result, rather than apply the fold
+        to each element sequentially in some defined ordering. For functions
+        that are not commutative, the result may differ from that of a fold
+        applied to a non-distributed collection.
+
+        >>> from operator import add
+        >>> sc.parallelize([1, 2, 3, 4, 5]).fold(0, add)
+        15
+        """
+        op = fail_on_stopiteration(op)
+
+        def func(iterator):
+            acc = zeroValue
+            for obj in iterator:
+                acc = op(acc, obj)
+            yield acc
+        # collecting result of mapPartitions here ensures that the copy of
+        # zeroValue provided to each partition is unique from the one provided
+        # to the final reduce call
+        vals = self.mapPartitions(func).collect()
+        return reduce(op, vals, zeroValue)
+--------------------------------------------------
+
+--- SAMPLE #79 ---
+DOCSTRING: Aggregate the elements of each partition, and then the results for all
+        the partitions, using a given combine functions and a neutral "zero
+        value."
+
+        The functions C{op(t1, t2)} is allowed to modify C{t1} and return it
+        as its result value to avoid object allocation; however, it should not
+        modify C{t2}.
+
+        The first function (seqOp) can return a different result type, U, than
+        the type of this RDD. Thus, we need one operation for merging a T into
+        an U and one operation for merging two U
+
+        >>> seqOp = (lambda x, y: (x[0] + y, x[1] + 1))
+        >>> combOp = (lambda x, y: (x[0] + y[0], x[1] + y[1]))
+        >>> sc.parallelize([1, 2, 3, 4]).aggregate((0, 0), seqOp, combOp)
+        (10, 4)
+        >>> sc.parallelize([]).aggregate((0, 0), seqOp, combOp)
+        (0, 0)
+CODE:
+def aggregate(self, zeroValue, seqOp, combOp):
+        """
+        Aggregate the elements of each partition, and then the results for all
+        the partitions, using a given combine functions and a neutral "zero
+        value."
+
+        The functions C{op(t1, t2)} is allowed to modify C{t1} and return it
+        as its result value to avoid object allocation; however, it should not
+        modify C{t2}.
+
+        The first function (seqOp) can return a different result type, U, than
+        the type of this RDD. Thus, we need one operation for merging a T into
+        an U and one operation for merging two U
+
+        >>> seqOp = (lambda x, y: (x[0] + y, x[1] + 1))
+        >>> combOp = (lambda x, y: (x[0] + y[0], x[1] + y[1]))
+        >>> sc.parallelize([1, 2, 3, 4]).aggregate((0, 0), seqOp, combOp)
+        (10, 4)
+        >>> sc.parallelize([]).aggregate((0, 0), seqOp, combOp)
+        (0, 0)
+        """
+        seqOp = fail_on_stopiteration(seqOp)
+        combOp = fail_on_stopiteration(combOp)
+
+        def func(iterator):
+            acc = zeroValue
+            for obj in iterator:
+                acc = seqOp(acc, obj)
+            yield acc
+        # collecting result of mapPartitions here ensures that the copy of
+        # zeroValue provided to each partition is unique from the one provided
+        # to the final reduce call
+        vals = self.mapPartitions(func).collect()
+        return reduce(combOp, vals, zeroValue)
+--------------------------------------------------
+
+--- SAMPLE #80 ---
+DOCSTRING: Aggregates the elements of this RDD in a multi-level tree
+        pattern.
+
+        :param depth: suggested depth of the tree (default: 2)
+
+        >>> add = lambda x, y: x + y
+        >>> rdd = sc.parallelize([-5, -4, -3, -2, -1, 1, 2, 3, 4], 10)
+        >>> rdd.treeAggregate(0, add, add)
+        -5
+        >>> rdd.treeAggregate(0, add, add, 1)
+        -5
+        >>> rdd.treeAggregate(0, add, add, 2)
+        -5
+        >>> rdd.treeAggregate(0, add, add, 5)
+        -5
+        >>> rdd.treeAggregate(0, add, add, 10)
+        -5
+CODE:
+def treeAggregate(self, zeroValue, seqOp, combOp, depth=2):
+        """
+        Aggregates the elements of this RDD in a multi-level tree
+        pattern.
+
+        :param depth: suggested depth of the tree (default: 2)
+
+        >>> add = lambda x, y: x + y
+        >>> rdd = sc.parallelize([-5, -4, -3, -2, -1, 1, 2, 3, 4], 10)
+        >>> rdd.treeAggregate(0, add, add)
+        -5
+        >>> rdd.treeAggregate(0, add, add, 1)
+        -5
+        >>> rdd.treeAggregate(0, add, add, 2)
+        -5
+        >>> rdd.treeAggregate(0, add, add, 5)
+        -5
+        >>> rdd.treeAggregate(0, add, add, 10)
+        -5
+        """
+        if depth < 1:
+            raise ValueError("Depth cannot be smaller than 1 but got %d." % depth)
+
+        if self.getNumPartitions() == 0:
+            return zeroValue
+
+        def aggregatePartition(iterator):
+            acc = zeroValue
+            for obj in iterator:
+                acc = seqOp(acc, obj)
+            yield acc
+
+        partiallyAggregated = self.mapPartitions(aggregatePartition)
+        numPartitions = partiallyAggregated.getNumPartitions()
+        scale = max(int(ceil(pow(numPartitions, 1.0 / depth))), 2)
+        # If creating an extra level doesn't help reduce the wall-clock time, we stop the tree
+        # aggregation.
+        while numPartitions > scale + numPartitions / scale:
+            numPartitions /= scale
+            curNumPartitions = int(numPartitions)
+
+            def mapPartition(i, iterator):
+                for obj in iterator:
+                    yield (i % curNumPartitions, obj)
+
+            partiallyAggregated = partiallyAggregated \
+                .mapPartitionsWithIndex(mapPartition) \
+                .reduceByKey(combOp, curNumPartitions) \
+                .values()
+
+        return partiallyAggregated.reduce(combOp)
+--------------------------------------------------
+
+--- SAMPLE #81 ---
+DOCSTRING: Find the maximum item in this RDD.
+
+        :param key: A function used to generate key for comparing
+
+        >>> rdd = sc.parallelize([1.0, 5.0, 43.0, 10.0])
+        >>> rdd.max()
+        43.0
+        >>> rdd.max(key=str)
+        5.0
+CODE:
+def max(self, key=None):
+        """
+        Find the maximum item in this RDD.
+
+        :param key: A function used to generate key for comparing
+
+        >>> rdd = sc.parallelize([1.0, 5.0, 43.0, 10.0])
+        >>> rdd.max()
+        43.0
+        >>> rdd.max(key=str)
+        5.0
+        """
+        if key is None:
+            return self.reduce(max)
+        return self.reduce(lambda a, b: max(a, b, key=key))
+--------------------------------------------------
+
+--- SAMPLE #82 ---
+DOCSTRING: Find the minimum item in this RDD.
+
+        :param key: A function used to generate key for comparing
+
+        >>> rdd = sc.parallelize([2.0, 5.0, 43.0, 10.0])
+        >>> rdd.min()
+        2.0
+        >>> rdd.min(key=str)
+        10.0
+CODE:
+def min(self, key=None):
+        """
+        Find the minimum item in this RDD.
+
+        :param key: A function used to generate key for comparing
+
+        >>> rdd = sc.parallelize([2.0, 5.0, 43.0, 10.0])
+        >>> rdd.min()
+        2.0
+        >>> rdd.min(key=str)
+        10.0
+        """
+        if key is None:
+            return self.reduce(min)
+        return self.reduce(lambda a, b: min(a, b, key=key))
+--------------------------------------------------
+
+--- SAMPLE #83 ---
+DOCSTRING: Add up the elements in this RDD.
+
+        >>> sc.parallelize([1.0, 2.0, 3.0]).sum()
+        6.0
+CODE:
+def sum(self):
+        """
+        Add up the elements in this RDD.
+
+        >>> sc.parallelize([1.0, 2.0, 3.0]).sum()
+        6.0
+        """
+        return self.mapPartitions(lambda x: [sum(x)]).fold(0, operator.add)
+--------------------------------------------------
+
+--- SAMPLE #84 ---
+DOCSTRING: Return a L{StatCounter} object that captures the mean, variance
+        and count of the RDD's elements in one operation.
+CODE:
+def stats(self):
+        """
+        Return a L{StatCounter} object that captures the mean, variance
+        and count of the RDD's elements in one operation.
+        """
+        def redFunc(left_counter, right_counter):
+            return left_counter.mergeStats(right_counter)
+
+        return self.mapPartitions(lambda i: [StatCounter(i)]).reduce(redFunc)
+--------------------------------------------------
+
+--- SAMPLE #85 ---
+DOCSTRING: Compute a histogram using the provided buckets. The buckets
+        are all open to the right except for the last which is closed.
+        e.g. [1,10,20,50] means the buckets are [1,10) [10,20) [20,50],
+        which means 1<=x<10, 10<=x<20, 20<=x<=50. And on the input of 1
+        and 50 we would have a histogram of 1,0,1.
+
+        If your histogram is evenly spaced (e.g. [0, 10, 20, 30]),
+        this can be switched from an O(log n) inseration to O(1) per
+        element (where n is the number of buckets).
+
+        Buckets must be sorted, not contain any duplicates, and have
+        at least two elements.
+
+        If `buckets` is a number, it will generate buckets which are
+        evenly spaced between the minimum and maximum of the RDD. For
+        example, if the min value is 0 and the max is 100, given `buckets`
+        as 2, the resulting buckets will be [0,50) [50,100]. `buckets` must
+        be at least 1. An exception is raised if the RDD contains infinity.
+        If the elements in the RDD do not vary (max == min), a single bucket
+        will be used.
+
+        The return value is a tuple of buckets and histogram.
+
+        >>> rdd = sc.parallelize(range(51))
+        >>> rdd.histogram(2)
+        ([0, 25, 50], [25, 26])
+        >>> rdd.histogram([0, 5, 25, 50])
+        ([0, 5, 25, 50], [5, 20, 26])
+        >>> rdd.histogram([0, 15, 30, 45, 60])  # evenly spaced buckets
+        ([0, 15, 30, 45, 60], [15, 15, 15, 6])
+        >>> rdd = sc.parallelize(["ab", "ac", "b", "bd", "ef"])
+        >>> rdd.histogram(("a", "b", "c"))
+        (('a', 'b', 'c'), [2, 2])
+CODE:
+def histogram(self, buckets):
+        """
+        Compute a histogram using the provided buckets. The buckets
+        are all open to the right except for the last which is closed.
+        e.g. [1,10,20,50] means the buckets are [1,10) [10,20) [20,50],
+        which means 1<=x<10, 10<=x<20, 20<=x<=50. And on the input of 1
+        and 50 we would have a histogram of 1,0,1.
+
+        If your histogram is evenly spaced (e.g. [0, 10, 20, 30]),
+        this can be switched from an O(log n) inseration to O(1) per
+        element (where n is the number of buckets).
+
+        Buckets must be sorted, not contain any duplicates, and have
+        at least two elements.
+
+        If `buckets` is a number, it will generate buckets which are
+        evenly spaced between the minimum and maximum of the RDD. For
+        example, if the min value is 0 and the max is 100, given `buckets`
+        as 2, the resulting buckets will be [0,50) [50,100]. `buckets` must
+        be at least 1. An exception is raised if the RDD contains infinity.
+        If the elements in the RDD do not vary (max == min), a single bucket
+        will be used.
+
+        The return value is a tuple of buckets and histogram.
+
+        >>> rdd = sc.parallelize(range(51))
+        >>> rdd.histogram(2)
+        ([0, 25, 50], [25, 26])
+        >>> rdd.histogram([0, 5, 25, 50])
+        ([0, 5, 25, 50], [5, 20, 26])
+        >>> rdd.histogram([0, 15, 30, 45, 60])  # evenly spaced buckets
+        ([0, 15, 30, 45, 60], [15, 15, 15, 6])
+        >>> rdd = sc.parallelize(["ab", "ac", "b", "bd", "ef"])
+        >>> rdd.histogram(("a", "b", "c"))
+        (('a', 'b', 'c'), [2, 2])
+        """
+
+        if isinstance(buckets, int):
+            if buckets < 1:
+                raise ValueError("number of buckets must be >= 1")
+
+            # filter out non-comparable elements
+            def comparable(x):
+                if x is None:
+                    return False
+                if type(x) is float and isnan(x):
+                    return False
+                return True
+
+            filtered = self.filter(comparable)
+
+            # faster than stats()
+            def minmax(a, b):
+                return min(a[0], b[0]), max(a[1], b[1])
+            try:
+                minv, maxv = filtered.map(lambda x: (x, x)).reduce(minmax)
+            except TypeError as e:
+                if " empty " in str(e):
+                    raise ValueError("can not generate buckets from empty RDD")
+                raise
+
+            if minv == maxv or buckets == 1:
+                return [minv, maxv], [filtered.count()]
+
+            try:
+                inc = (maxv - minv) / buckets
+            except TypeError:
+                raise TypeError("Can not generate buckets with non-number in RDD")
+
+            if isinf(inc):
+                raise ValueError("Can not generate buckets with infinite value")
+
+            # keep them as integer if possible
+            inc = int(inc)
+            if inc * buckets != maxv - minv:
+                inc = (maxv - minv) * 1.0 / buckets
+
+            buckets = [i * inc + minv for i in range(buckets)]
+            buckets.append(maxv)  # fix accumulated error
+            even = True
+
+        elif isinstance(buckets, (list, tuple)):
+            if len(buckets) < 2:
+                raise ValueError("buckets should have more than one value")
+
+            if any(i is None or isinstance(i, float) and isnan(i) for i in buckets):
+                raise ValueError("can not have None or NaN in buckets")
+
+            if sorted(buckets) != list(buckets):
+                raise ValueError("buckets should be sorted")
+
+            if len(set(buckets)) != len(buckets):
+                raise ValueError("buckets should not contain duplicated values")
+
+            minv = buckets[0]
+            maxv = buckets[-1]
+            even = False
+            inc = None
+            try:
+                steps = [buckets[i + 1] - buckets[i] for i in range(len(buckets) - 1)]
+            except TypeError:
+                pass  # objects in buckets do not support '-'
+            else:
+                if max(steps) - min(steps) < 1e-10:  # handle precision errors
+                    even = True
+                    inc = (maxv - minv) / (len(buckets) - 1)
+
+        else:
+            raise TypeError("buckets should be a list or tuple or number(int or long)")
+
+        def histogram(iterator):
+            counters = [0] * len(buckets)
+            for i in iterator:
+                if i is None or (type(i) is float and isnan(i)) or i > maxv or i < minv:
+                    continue
+                t = (int((i - minv) / inc) if even
+                     else bisect.bisect_right(buckets, i) - 1)
+                counters[t] += 1
+            # add last two together
+            last = counters.pop()
+            counters[-1] += last
+            return [counters]
+
+        def mergeCounters(a, b):
+            return [i + j for i, j in zip(a, b)]
+
+        return buckets, self.mapPartitions(histogram).reduce(mergeCounters)
+--------------------------------------------------
+
+--- SAMPLE #86 ---
+DOCSTRING: Return the count of each unique value in this RDD as a dictionary of
+        (value, count) pairs.
+
+        >>> sorted(sc.parallelize([1, 2, 1, 2, 2], 2).countByValue().items())
+        [(1, 2), (2, 3)]
+CODE:
+def countByValue(self):
+        """
+        Return the count of each unique value in this RDD as a dictionary of
+        (value, count) pairs.
+
+        >>> sorted(sc.parallelize([1, 2, 1, 2, 2], 2).countByValue().items())
+        [(1, 2), (2, 3)]
+        """
+        def countPartition(iterator):
+            counts = defaultdict(int)
+            for obj in iterator:
+                counts[obj] += 1
+            yield counts
+
+        def mergeMaps(m1, m2):
+            for k, v in m2.items():
+                m1[k] += v
+            return m1
+        return self.mapPartitions(countPartition).reduce(mergeMaps)
+--------------------------------------------------
+
+--- SAMPLE #87 ---
+DOCSTRING: Get the top N elements from an RDD.
+
+        .. note:: This method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+
+        .. note:: It returns the list sorted in descending order.
+
+        >>> sc.parallelize([10, 4, 2, 12, 3]).top(1)
+        [12]
+        >>> sc.parallelize([2, 3, 4, 5, 6], 2).top(2)
+        [6, 5]
+        >>> sc.parallelize([10, 4, 2, 12, 3]).top(3, key=str)
+        [4, 3, 2]
+CODE:
+def top(self, num, key=None):
+        """
+        Get the top N elements from an RDD.
+
+        .. note:: This method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+
+        .. note:: It returns the list sorted in descending order.
+
+        >>> sc.parallelize([10, 4, 2, 12, 3]).top(1)
+        [12]
+        >>> sc.parallelize([2, 3, 4, 5, 6], 2).top(2)
+        [6, 5]
+        >>> sc.parallelize([10, 4, 2, 12, 3]).top(3, key=str)
+        [4, 3, 2]
+        """
+        def topIterator(iterator):
+            yield heapq.nlargest(num, iterator, key=key)
+
+        def merge(a, b):
+            return heapq.nlargest(num, a + b, key=key)
+
+        return self.mapPartitions(topIterator).reduce(merge)
+--------------------------------------------------
+
+--- SAMPLE #88 ---
+DOCSTRING: Get the N elements from an RDD ordered in ascending order or as
+        specified by the optional key function.
+
+        .. note:: this method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+
+        >>> sc.parallelize([10, 1, 2, 9, 3, 4, 5, 6, 7]).takeOrdered(6)
+        [1, 2, 3, 4, 5, 6]
+        >>> sc.parallelize([10, 1, 2, 9, 3, 4, 5, 6, 7], 2).takeOrdered(6, key=lambda x: -x)
+        [10, 9, 7, 6, 5, 4]
+CODE:
+def takeOrdered(self, num, key=None):
+        """
+        Get the N elements from an RDD ordered in ascending order or as
+        specified by the optional key function.
+
+        .. note:: this method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+
+        >>> sc.parallelize([10, 1, 2, 9, 3, 4, 5, 6, 7]).takeOrdered(6)
+        [1, 2, 3, 4, 5, 6]
+        >>> sc.parallelize([10, 1, 2, 9, 3, 4, 5, 6, 7], 2).takeOrdered(6, key=lambda x: -x)
+        [10, 9, 7, 6, 5, 4]
+        """
+
+        def merge(a, b):
+            return heapq.nsmallest(num, a + b, key)
+
+        return self.mapPartitions(lambda it: [heapq.nsmallest(num, it, key)]).reduce(merge)
+--------------------------------------------------
+
+--- SAMPLE #89 ---
+DOCSTRING: Take the first num elements of the RDD.
+
+        It works by first scanning one partition, and use the results from
+        that partition to estimate the number of additional partitions needed
+        to satisfy the limit.
+
+        Translated from the Scala implementation in RDD#take().
+
+        .. note:: this method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+
+        >>> sc.parallelize([2, 3, 4, 5, 6]).cache().take(2)
+        [2, 3]
+        >>> sc.parallelize([2, 3, 4, 5, 6]).take(10)
+        [2, 3, 4, 5, 6]
+        >>> sc.parallelize(range(100), 100).filter(lambda x: x > 90).take(3)
+        [91, 92, 93]
+CODE:
+def take(self, num):
+        """
+        Take the first num elements of the RDD.
+
+        It works by first scanning one partition, and use the results from
+        that partition to estimate the number of additional partitions needed
+        to satisfy the limit.
+
+        Translated from the Scala implementation in RDD#take().
+
+        .. note:: this method should only be used if the resulting array is expected
+            to be small, as all the data is loaded into the driver's memory.
+
+        >>> sc.parallelize([2, 3, 4, 5, 6]).cache().take(2)
+        [2, 3]
+        >>> sc.parallelize([2, 3, 4, 5, 6]).take(10)
+        [2, 3, 4, 5, 6]
+        >>> sc.parallelize(range(100), 100).filter(lambda x: x > 90).take(3)
+        [91, 92, 93]
+        """
+        items = []
+        totalParts = self.getNumPartitions()
+        partsScanned = 0
+
+        while len(items) < num and partsScanned < totalParts:
+            # The number of partitions to try in this iteration.
+            # It is ok for this number to be greater than totalParts because
+            # we actually cap it at totalParts in runJob.
+            numPartsToTry = 1
+            if partsScanned > 0:
+                # If we didn't find any rows after the previous iteration,
+                # quadruple and retry.  Otherwise, interpolate the number of
+                # partitions we need to try, but overestimate it by 50%.
+                # We also cap the estimation in the end.
+                if len(items) == 0:
+                    numPartsToTry = partsScanned * 4
+                else:
+                    # the first parameter of max is >=1 whenever partsScanned >= 2
+                    numPartsToTry = int(1.5 * num * partsScanned / len(items)) - partsScanned
+                    numPartsToTry = min(max(numPartsToTry, 1), partsScanned * 4)
+
+            left = num - len(items)
+
+            def takeUpToNumLeft(iterator):
+                iterator = iter(iterator)
+                taken = 0
+                while taken < left:
+                    try:
+                        yield next(iterator)
+                    except StopIteration:
+                        return
+                    taken += 1
+
+            p = range(partsScanned, min(partsScanned + numPartsToTry, totalParts))
+            res = self.context.runJob(self, takeUpToNumLeft, p)
+
+            items += res
+            partsScanned += numPartsToTry
+
+        return items[:num]
+--------------------------------------------------
+
+--- SAMPLE #90 ---
+DOCSTRING: Output a Python RDD of key-value pairs (of form C{RDD[(K, V)]}) to any Hadoop file
+        system, using the new Hadoop OutputFormat API (mapreduce package). Keys/values are
+        converted for output using either user specified converters or, by default,
+        L{org.apache.spark.api.python.JavaToWritableConverter}.
+
+        :param conf: Hadoop job configuration, passed in as a dict
+        :param keyConverter: (None by default)
+        :param valueConverter: (None by default)
+CODE:
+def saveAsNewAPIHadoopDataset(self, conf, keyConverter=None, valueConverter=None):
+        """
+        Output a Python RDD of key-value pairs (of form C{RDD[(K, V)]}) to any Hadoop file
+        system, using the new Hadoop OutputFormat API (mapreduce package). Keys/values are
+        converted for output using either user specified converters or, by default,
+        L{org.apache.spark.api.python.JavaToWritableConverter}.
+
+        :param conf: Hadoop job configuration, passed in as a dict
+        :param keyConverter: (None by default)
+        :param valueConverter: (None by default)
+        """
+        jconf = self.ctx._dictToJavaMap(conf)
+        pickledRDD = self._pickled()
+        self.ctx._jvm.PythonRDD.saveAsHadoopDataset(pickledRDD._jrdd, True, jconf,
+                                                    keyConverter, valueConverter, True)
+--------------------------------------------------
+
+--- SAMPLE #91 ---
+DOCSTRING: Output a Python RDD of key-value pairs (of form C{RDD[(K, V)]}) to any Hadoop file
+        system, using the new Hadoop OutputFormat API (mapreduce package). Key and value types
+        will be inferred if not specified. Keys and values are converted for output using either
+        user specified converters or L{org.apache.spark.api.python.JavaToWritableConverter}. The
+        C{conf} is applied on top of the base Hadoop conf associated with the SparkContext
+        of this RDD to create a merged Hadoop MapReduce job configuration for saving the data.
+
+        :param path: path to Hadoop file
+        :param outputFormatClass: fully qualified classname of Hadoop OutputFormat
+               (e.g. "org.apache.hadoop.mapreduce.lib.output.SequenceFileOutputFormat")
+        :param keyClass: fully qualified classname of key Writable class
+               (e.g. "org.apache.hadoop.io.IntWritable", None by default)
+        :param valueClass: fully qualified classname of value Writable class
+               (e.g. "org.apache.hadoop.io.Text", None by default)
+        :param keyConverter: (None by default)
+        :param valueConverter: (None by default)
+        :param conf: Hadoop job configuration, passed in as a dict (None by default)
+CODE:
+def saveAsNewAPIHadoopFile(self, path, outputFormatClass, keyClass=None, valueClass=None,
+                               keyConverter=None, valueConverter=None, conf=None):
+        """
+        Output a Python RDD of key-value pairs (of form C{RDD[(K, V)]}) to any Hadoop file
+        system, using the new Hadoop OutputFormat API (mapreduce package). Key and value types
+        will be inferred if not specified. Keys and values are converted for output using either
+        user specified converters or L{org.apache.spark.api.python.JavaToWritableConverter}. The
+        C{conf} is applied on top of the base Hadoop conf associated with the SparkContext
+        of this RDD to create a merged Hadoop MapReduce job configuration for saving the data.
+
+        :param path: path to Hadoop file
+        :param outputFormatClass: fully qualified classname of Hadoop OutputFormat
+               (e.g. "org.apache.hadoop.mapreduce.lib.output.SequenceFileOutputFormat")
+        :param keyClass: fully qualified classname of key Writable class
+               (e.g. "org.apache.hadoop.io.IntWritable", None by default)
+        :param valueClass: fully qualified classname of value Writable class
+               (e.g. "org.apache.hadoop.io.Text", None by default)
+        :param keyConverter: (None by default)
+        :param valueConverter: (None by default)
+        :param conf: Hadoop job configuration, passed in as a dict (None by default)
+        """
+        jconf = self.ctx._dictToJavaMap(conf)
+        pickledRDD = self._pickled()
+        self.ctx._jvm.PythonRDD.saveAsNewAPIHadoopFile(pickledRDD._jrdd, True, path,
+                                                       outputFormatClass,
+                                                       keyClass, valueClass,
+                                                       keyConverter, valueConverter, jconf)
+--------------------------------------------------
+
+--- SAMPLE #92 ---
+DOCSTRING: Output a Python RDD of key-value pairs (of form C{RDD[(K, V)]}) to any Hadoop file
+        system, using the L{org.apache.hadoop.io.Writable} types that we convert from the
+        RDD's key and value types. The mechanism is as follows:
+
+            1. Pyrolite is used to convert pickled Python RDD into RDD of Java objects.
+            2. Keys and values of this Java RDD are converted to Writables and written out.
+
+        :param path: path to sequence file
+        :param compressionCodecClass: (None by default)
+CODE:
+def saveAsSequenceFile(self, path, compressionCodecClass=None):
+        """
+        Output a Python RDD of key-value pairs (of form C{RDD[(K, V)]}) to any Hadoop file
+        system, using the L{org.apache.hadoop.io.Writable} types that we convert from the
+        RDD's key and value types. The mechanism is as follows:
+
+            1. Pyrolite is used to convert pickled Python RDD into RDD of Java objects.
+            2. Keys and values of this Java RDD are converted to Writables and written out.
+
+        :param path: path to sequence file
+        :param compressionCodecClass: (None by default)
+        """
+        pickledRDD = self._pickled()
+        self.ctx._jvm.PythonRDD.saveAsSequenceFile(pickledRDD._jrdd, True,
+                                                   path, compressionCodecClass)
+--------------------------------------------------
+
+--- SAMPLE #93 ---
+DOCSTRING: Save this RDD as a SequenceFile of serialized objects. The serializer
+        used is L{pyspark.serializers.PickleSerializer}, default batch size
+        is 10.
+
+        >>> tmpFile = NamedTemporaryFile(delete=True)
+        >>> tmpFile.close()
+        >>> sc.parallelize([1, 2, 'spark', 'rdd']).saveAsPickleFile(tmpFile.name, 3)
+        >>> sorted(sc.pickleFile(tmpFile.name, 5).map(str).collect())
+        ['1', '2', 'rdd', 'spark']
+CODE:
+def saveAsPickleFile(self, path, batchSize=10):
+        """
+        Save this RDD as a SequenceFile of serialized objects. The serializer
+        used is L{pyspark.serializers.PickleSerializer}, default batch size
+        is 10.
+
+        >>> tmpFile = NamedTemporaryFile(delete=True)
+        >>> tmpFile.close()
+        >>> sc.parallelize([1, 2, 'spark', 'rdd']).saveAsPickleFile(tmpFile.name, 3)
+        >>> sorted(sc.pickleFile(tmpFile.name, 5).map(str).collect())
+        ['1', '2', 'rdd', 'spark']
+        """
+        if batchSize == 0:
+            ser = AutoBatchedSerializer(PickleSerializer())
+        else:
+            ser = BatchedSerializer(PickleSerializer(), batchSize)
+        self._reserialize(ser)._jrdd.saveAsObjectFile(path)
+--------------------------------------------------
+
+--- SAMPLE #94 ---
+DOCSTRING: Save this RDD as a text file, using string representations of elements.
+
+        @param path: path to text file
+        @param compressionCodecClass: (None by default) string i.e.
+            "org.apache.hadoop.io.compress.GzipCodec"
+
+        >>> tempFile = NamedTemporaryFile(delete=True)
+        >>> tempFile.close()
+        >>> sc.parallelize(range(10)).saveAsTextFile(tempFile.name)
+        >>> from fileinput import input
+        >>> from glob import glob
+        >>> ''.join(sorted(input(glob(tempFile.name + "/part-0000*"))))
+        '0\\n1\\n2\\n3\\n4\\n5\\n6\\n7\\n8\\n9\\n'
+
+        Empty lines are tolerated when saving to text files.
+
+        >>> tempFile2 = NamedTemporaryFile(delete=True)
+        >>> tempFile2.close()
+        >>> sc.parallelize(['', 'foo', '', 'bar', '']).saveAsTextFile(tempFile2.name)
+        >>> ''.join(sorted(input(glob(tempFile2.name + "/part-0000*"))))
+        '\\n\\n\\nbar\\nfoo\\n'
+
+        Using compressionCodecClass
+
+        >>> tempFile3 = NamedTemporaryFile(delete=True)
+        >>> tempFile3.close()
+        >>> codec = "org.apache.hadoop.io.compress.GzipCodec"
+        >>> sc.parallelize(['foo', 'bar']).saveAsTextFile(tempFile3.name, codec)
+        >>> from fileinput import input, hook_compressed
+        >>> result = sorted(input(glob(tempFile3.name + "/part*.gz"), openhook=hook_compressed))
+        >>> b''.join(result).decode('utf-8')
+        u'bar\\nfoo\\n'
+CODE:
+def saveAsTextFile(self, path, compressionCodecClass=None):
+        """
+        Save this RDD as a text file, using string representations of elements.
+
+        @param path: path to text file
+        @param compressionCodecClass: (None by default) string i.e.
+            "org.apache.hadoop.io.compress.GzipCodec"
+
+        >>> tempFile = NamedTemporaryFile(delete=True)
+        >>> tempFile.close()
+        >>> sc.parallelize(range(10)).saveAsTextFile(tempFile.name)
+        >>> from fileinput import input
+        >>> from glob import glob
+        >>> ''.join(sorted(input(glob(tempFile.name + "/part-0000*"))))
+        '0\\n1\\n2\\n3\\n4\\n5\\n6\\n7\\n8\\n9\\n'
+
+        Empty lines are tolerated when saving to text files.
+
+        >>> tempFile2 = NamedTemporaryFile(delete=True)
+        >>> tempFile2.close()
+        >>> sc.parallelize(['', 'foo', '', 'bar', '']).saveAsTextFile(tempFile2.name)
+        >>> ''.join(sorted(input(glob(tempFile2.name + "/part-0000*"))))
+        '\\n\\n\\nbar\\nfoo\\n'
+
+        Using compressionCodecClass
+
+        >>> tempFile3 = NamedTemporaryFile(delete=True)
+        >>> tempFile3.close()
+        >>> codec = "org.apache.hadoop.io.compress.GzipCodec"
+        >>> sc.parallelize(['foo', 'bar']).saveAsTextFile(tempFile3.name, codec)
+        >>> from fileinput import input, hook_compressed
+        >>> result = sorted(input(glob(tempFile3.name + "/part*.gz"), openhook=hook_compressed))
+        >>> b''.join(result).decode('utf-8')
+        u'bar\\nfoo\\n'
+        """
+        def func(split, iterator):
+            for x in iterator:
+                if not isinstance(x, (unicode, bytes)):
+                    x = unicode(x)
+                if isinstance(x, unicode):
+                    x = x.encode("utf-8")
+                yield x
+        keyed = self.mapPartitionsWithIndex(func)
+        keyed._bypass_serializer = True
+        if compressionCodecClass:
+            compressionCodec = self.ctx._jvm.java.lang.Class.forName(compressionCodecClass)
+            keyed._jrdd.map(self.ctx._jvm.BytesToString()).saveAsTextFile(path, compressionCodec)
+        else:
+            keyed._jrdd.map(self.ctx._jvm.BytesToString()).saveAsTextFile(path)
+--------------------------------------------------
+
+--- SAMPLE #95 ---
+DOCSTRING: Merge the values for each key using an associative and commutative reduce function.
+
+        This will also perform the merging locally on each mapper before
+        sending results to a reducer, similarly to a "combiner" in MapReduce.
+
+        Output will be partitioned with C{numPartitions} partitions, or
+        the default parallelism level if C{numPartitions} is not specified.
+        Default partitioner is hash-partition.
+
+        >>> from operator import add
+        >>> rdd = sc.parallelize([("a", 1), ("b", 1), ("a", 1)])
+        >>> sorted(rdd.reduceByKey(add).collect())
+        [('a', 2), ('b', 1)]
+CODE:
+def reduceByKey(self, func, numPartitions=None, partitionFunc=portable_hash):
+        """
+        Merge the values for each key using an associative and commutative reduce function.
+
+        This will also perform the merging locally on each mapper before
+        sending results to a reducer, similarly to a "combiner" in MapReduce.
+
+        Output will be partitioned with C{numPartitions} partitions, or
+        the default parallelism level if C{numPartitions} is not specified.
+        Default partitioner is hash-partition.
+
+        >>> from operator import add
+        >>> rdd = sc.parallelize([("a", 1), ("b", 1), ("a", 1)])
+        >>> sorted(rdd.reduceByKey(add).collect())
+        [('a', 2), ('b', 1)]
+        """
+        return self.combineByKey(lambda x: x, func, func, numPartitions, partitionFunc)
+--------------------------------------------------
+
+--- SAMPLE #96 ---
+DOCSTRING: Merge the values for each key using an associative and commutative reduce function, but
+        return the results immediately to the master as a dictionary.
+
+        This will also perform the merging locally on each mapper before
+        sending results to a reducer, similarly to a "combiner" in MapReduce.
+
+        >>> from operator import add
+        >>> rdd = sc.parallelize([("a", 1), ("b", 1), ("a", 1)])
+        >>> sorted(rdd.reduceByKeyLocally(add).items())
+        [('a', 2), ('b', 1)]
+CODE:
+def reduceByKeyLocally(self, func):
+        """
+        Merge the values for each key using an associative and commutative reduce function, but
+        return the results immediately to the master as a dictionary.
+
+        This will also perform the merging locally on each mapper before
+        sending results to a reducer, similarly to a "combiner" in MapReduce.
+
+        >>> from operator import add
+        >>> rdd = sc.parallelize([("a", 1), ("b", 1), ("a", 1)])
+        >>> sorted(rdd.reduceByKeyLocally(add).items())
+        [('a', 2), ('b', 1)]
+        """
+        func = fail_on_stopiteration(func)
+
+        def reducePartition(iterator):
+            m = {}
+            for k, v in iterator:
+                m[k] = func(m[k], v) if k in m else v
+            yield m
+
+        def mergeMaps(m1, m2):
+            for k, v in m2.items():
+                m1[k] = func(m1[k], v) if k in m1 else v
+            return m1
+        return self.mapPartitions(reducePartition).reduce(mergeMaps)
+--------------------------------------------------
+
+--- SAMPLE #97 ---
+DOCSTRING: Return a copy of the RDD partitioned using the specified partitioner.
+
+        >>> pairs = sc.parallelize([1, 2, 3, 4, 2, 4, 1]).map(lambda x: (x, x))
+        >>> sets = pairs.partitionBy(2).glom().collect()
+        >>> len(set(sets[0]).intersection(set(sets[1])))
+        0
+CODE:
+def partitionBy(self, numPartitions, partitionFunc=portable_hash):
+        """
+        Return a copy of the RDD partitioned using the specified partitioner.
+
+        >>> pairs = sc.parallelize([1, 2, 3, 4, 2, 4, 1]).map(lambda x: (x, x))
+        >>> sets = pairs.partitionBy(2).glom().collect()
+        >>> len(set(sets[0]).intersection(set(sets[1])))
+        0
+        """
+        if numPartitions is None:
+            numPartitions = self._defaultReducePartitions()
+        partitioner = Partitioner(numPartitions, partitionFunc)
+        if self.partitioner == partitioner:
+            return self
+
+        # Transferring O(n) objects to Java is too expensive.
+        # Instead, we'll form the hash buckets in Python,
+        # transferring O(numPartitions) objects to Java.
+        # Each object is a (splitNumber, [objects]) pair.
+        # In order to avoid too huge objects, the objects are
+        # grouped into chunks.
+        outputSerializer = self.ctx._unbatched_serializer
+
+        limit = (_parse_memory(self.ctx._conf.get(
+            "spark.python.worker.memory", "512m")) / 2)
+
+        def add_shuffle_key(split, iterator):
+
+            buckets = defaultdict(list)
+            c, batch = 0, min(10 * numPartitions, 1000)
+
+            for k, v in iterator:
+                buckets[partitionFunc(k) % numPartitions].append((k, v))
+                c += 1
+
+                # check used memory and avg size of chunk of objects
+                if (c % 1000 == 0 and get_used_memory() > limit
+                        or c > batch):
+                    n, size = len(buckets), 0
+                    for split in list(buckets.keys()):
+                        yield pack_long(split)
+                        d = outputSerializer.dumps(buckets[split])
+                        del buckets[split]
+                        yield d
+                        size += len(d)
+
+                    avg = int(size / n) >> 20
+                    # let 1M < avg < 10M
+                    if avg < 1:
+                        batch *= 1.5
+                    elif avg > 10:
+                        batch = max(int(batch / 1.5), 1)
+                    c = 0
+
+            for split, items in buckets.items():
+                yield pack_long(split)
+                yield outputSerializer.dumps(items)
+
+        keyed = self.mapPartitionsWithIndex(add_shuffle_key, preservesPartitioning=True)
+        keyed._bypass_serializer = True
+        with SCCallSiteSync(self.context) as css:
+            pairRDD = self.ctx._jvm.PairwiseRDD(
+                keyed._jrdd.rdd()).asJavaPairRDD()
+            jpartitioner = self.ctx._jvm.PythonPartitioner(numPartitions,
+                                                           id(partitionFunc))
+        jrdd = self.ctx._jvm.PythonRDD.valueOfPair(pairRDD.partitionBy(jpartitioner))
+        rdd = RDD(jrdd, self.ctx, BatchedSerializer(outputSerializer))
+        rdd.partitioner = partitioner
+        return rdd
+--------------------------------------------------
+
+--- SAMPLE #98 ---
+DOCSTRING: Generic function to combine the elements for each key using a custom
+        set of aggregation functions.
+
+        Turns an RDD[(K, V)] into a result of type RDD[(K, C)], for a "combined
+        type" C.
+
+        Users provide three functions:
+
+            - C{createCombiner}, which turns a V into a C (e.g., creates
+              a one-element list)
+            - C{mergeValue}, to merge a V into a C (e.g., adds it to the end of
+              a list)
+            - C{mergeCombiners}, to combine two C's into a single one (e.g., merges
+              the lists)
+
+        To avoid memory allocation, both mergeValue and mergeCombiners are allowed to
+        modify and return their first argument instead of creating a new C.
+
+        In addition, users can control the partitioning of the output RDD.
+
+        .. note:: V and C can be different -- for example, one might group an RDD of type
+            (Int, Int) into an RDD of type (Int, List[Int]).
+
+        >>> x = sc.parallelize([("a", 1), ("b", 1), ("a", 2)])
+        >>> def to_list(a):
+        ...     return [a]
+        ...
+        >>> def append(a, b):
+        ...     a.append(b)
+        ...     return a
+        ...
+        >>> def extend(a, b):
+        ...     a.extend(b)
+        ...     return a
+        ...
+        >>> sorted(x.combineByKey(to_list, append, extend).collect())
+        [('a', [1, 2]), ('b', [1])]
+CODE:
+def combineByKey(self, createCombiner, mergeValue, mergeCombiners,
+                     numPartitions=None, partitionFunc=portable_hash):
+        """
+        Generic function to combine the elements for each key using a custom
+        set of aggregation functions.
+
+        Turns an RDD[(K, V)] into a result of type RDD[(K, C)], for a "combined
+        type" C.
+
+        Users provide three functions:
+
+            - C{createCombiner}, which turns a V into a C (e.g., creates
+              a one-element list)
+            - C{mergeValue}, to merge a V into a C (e.g., adds it to the end of
+              a list)
+            - C{mergeCombiners}, to combine two C's into a single one (e.g., merges
+              the lists)
+
+        To avoid memory allocation, both mergeValue and mergeCombiners are allowed to
+        modify and return their first argument instead of creating a new C.
+
+        In addition, users can control the partitioning of the output RDD.
+
+        .. note:: V and C can be different -- for example, one might group an RDD of type
+            (Int, Int) into an RDD of type (Int, List[Int]).
+
+        >>> x = sc.parallelize([("a", 1), ("b", 1), ("a", 2)])
+        >>> def to_list(a):
+        ...     return [a]
+        ...
+        >>> def append(a, b):
+        ...     a.append(b)
+        ...     return a
+        ...
+        >>> def extend(a, b):
+        ...     a.extend(b)
+        ...     return a
+        ...
+        >>> sorted(x.combineByKey(to_list, append, extend).collect())
+        [('a', [1, 2]), ('b', [1])]
+        """
+        if numPartitions is None:
+            numPartitions = self._defaultReducePartitions()
+
+        serializer = self.ctx.serializer
+        memory = self._memory_limit()
+        agg = Aggregator(createCombiner, mergeValue, mergeCombiners)
+
+        def combineLocally(iterator):
+            merger = ExternalMerger(agg, memory * 0.9, serializer)
+            merger.mergeValues(iterator)
+            return merger.items()
+
+        locally_combined = self.mapPartitions(combineLocally, preservesPartitioning=True)
+        shuffled = locally_combined.partitionBy(numPartitions, partitionFunc)
+
+        def _mergeCombiners(iterator):
+            merger = ExternalMerger(agg, memory, serializer)
+            merger.mergeCombiners(iterator)
+            return merger.items()
+
+        return shuffled.mapPartitions(_mergeCombiners, preservesPartitioning=True)
+--------------------------------------------------
+
+--- SAMPLE #99 ---
+DOCSTRING: Aggregate the values of each key, using given combine functions and a neutral
+        "zero value". This function can return a different result type, U, than the type
+        of the values in this RDD, V. Thus, we need one operation for merging a V into
+        a U and one operation for merging two U's, The former operation is used for merging
+        values within a partition, and the latter is used for merging values between
+        partitions. To avoid memory allocation, both of these functions are
+        allowed to modify and return their first argument instead of creating a new U.
+CODE:
+def aggregateByKey(self, zeroValue, seqFunc, combFunc, numPartitions=None,
+                       partitionFunc=portable_hash):
+        """
+        Aggregate the values of each key, using given combine functions and a neutral
+        "zero value". This function can return a different result type, U, than the type
+        of the values in this RDD, V. Thus, we need one operation for merging a V into
+        a U and one operation for merging two U's, The former operation is used for merging
+        values within a partition, and the latter is used for merging values between
+        partitions. To avoid memory allocation, both of these functions are
+        allowed to modify and return their first argument instead of creating a new U.
+        """
+        def createZero():
+            return copy.deepcopy(zeroValue)
+
+        return self.combineByKey(
+            lambda v: seqFunc(createZero(), v), seqFunc, combFunc, numPartitions, partitionFunc)
+--------------------------------------------------
+
+--- SAMPLE #100 ---
+DOCSTRING: Merge the values for each key using an associative function "func"
+        and a neutral "zeroValue" which may be added to the result an
+        arbitrary number of times, and must not change the result
+        (e.g., 0 for addition, or 1 for multiplication.).
+
+        >>> rdd = sc.parallelize([("a", 1), ("b", 1), ("a", 1)])
+        >>> from operator import add
+        >>> sorted(rdd.foldByKey(0, add).collect())
+        [('a', 2), ('b', 1)]
+CODE:
+def foldByKey(self, zeroValue, func, numPartitions=None, partitionFunc=portable_hash):
+        """
+        Merge the values for each key using an associative function "func"
+        and a neutral "zeroValue" which may be added to the result an
+        arbitrary number of times, and must not change the result
+        (e.g., 0 for addition, or 1 for multiplication.).
+
+        >>> rdd = sc.parallelize([("a", 1), ("b", 1), ("a", 1)])
+        >>> from operator import add
+        >>> sorted(rdd.foldByKey(0, add).collect())
+        [('a', 2), ('b', 1)]
+        """
+        def createZero():
+            return copy.deepcopy(zeroValue)
+
+        return self.combineByKey(lambda v: func(createZero(), v), func, func, numPartitions,
+                                 partitionFunc)
+--------------------------------------------------
+
 
 
 ================================================================================
@@ -913,98 +4532,6 @@ class Seq2Seq(nn.Module):
             input = trg[:, t] if teacher_force else top1
             
         return outputs
-
-================================================================================
-
---- FILE: C2Orchestrator.py | PATH: Project\scripts\C2Orchestrator.py ---
--------------------------------------------------------------------------
-
-import os
-import argparse
-import logging
-from data.download_dataset import download_codesearchnet_robust
-from data.inspect_dataset import save_human_readable_samples
-from data.preprocess import prepare_vocab
-from scripts.train import main as run_training
-from scripts.evaluate import main as run_evaluation
-
-# Setup logging con precisione chirurgica
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-class CodeSummarizationPipeline:
-    def __init__(self, config):
-        self.config = config
-        self.data_dir = "Project/Datasets"
-        self.tokenizer_path = "Project/tokenizer.json"
-        # Sottocartella dedicata per l'audit umano
-        self.preview_subdir = "Human_readable_sample"
-
-    def run(self):
-        logger.info("--- AVVIO PIPELINE DI CODE SUMMARIZATION ---")
-
-        # FASE 1: ACQUISIZIONE (EXTRACT)
-        # Implementazione del principio di Idempotenza: non scaricare se già presente
-        if not os.path.exists(self.data_dir) or self.config.force_download:
-            logger.info("Fase 1: Download robusto del dataset via CDN...")
-            download_codesearchnet_robust(self.data_dir)
-        else:
-            logger.info("Fase 1: Dataset già presente localmente.")
-
-        # FASE 1.1: ISPEZIONE (HUMAN CHECK)
-        # Trasformiamo i bit compressi in evidenza documentale leggibile
-        logger.info(f"Fase 1.1: Generazione campioni leggibili in {self.preview_subdir}...")
-        preview_file = save_human_readable_samples(self.data_dir, self.preview_subdir)
-        
-        if preview_file:
-            logger.info(f"Ispezione completata con successo. File: {preview_file}")
-        else:
-            logger.warning("Fase 1.1: Impossibile generare l'ispezione. Verifica i file .jsonl.gz")
-
-        # FASE 2: PREPROCESSING (TRANSFORM)
-        # Costruzione dell'Iperspazio Semantico (Tokenizer BPE)
-        if not os.path.exists(self.tokenizer_path) or self.config.force_preprocess:
-            logger.info("Fase 2: Addestramento Tokenizer BPE e Preprocessing...")
-            prepare_vocab(self.data_dir, self.tokenizer_path)
-        else:
-            logger.info("Fase 2: Tokenizer già presente. Skipping.")
-
-        # FASE 3: TRAINING (LEARN)
-        # Fase critica: Ottimizzazione stocastica dei pesi
-        logger.info("Fase 3: Avvio Addestramento del Modello (LSTM Seq2Seq)...")
-        run_training(epochs=self.config.epochs, batch_size=self.config.batch_size)
-
-        # FASE 4: VALUTAZIONE (VALIDATE)
-        # Calcolo delle metriche di generalizzazione (BLEU/ROUGE)
-        logger.info("Fase 4: Valutazione finale sul Test Set...")
-        run_evaluation(model_path="best-model.pt")
-
-        logger.info("--- PIPELINE COMPLETATA CON SUCCESSO ---")
-
-
-
-
-
-
-
-
-
-
-
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Master Orchestrator - Project MLSA")
-    parser.add_argument("--subset", type=int, default=1000, help="Subset per test rapido")
-    parser.add_argument("--epochs", type=int, default=10, help="Numero di epoche di training")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size per SGD")
-    parser.add_argument("--force_download", action="store_true", help="Forza il re-download")
-    parser.add_argument("--force_preprocess", action="store_true", help="Forza il re-tokenizer")
-    
-    args = parser.parse_args()
-    
-    pipeline = CodeSummarizationPipeline(args)
-    pipeline.run()
 
 ================================================================================
 

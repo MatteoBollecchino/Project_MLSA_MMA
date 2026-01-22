@@ -2,6 +2,7 @@ Project Tree for: c:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project
 ============================================================================
 
 Project/
+├───C2Orchestrator.py
 ├───configs.txt
 ├───requirements.txt
 ├───tokenizer.json
@@ -12,8 +13,6 @@ Project/
     ├───inspect_dataset.py
     ├───preprocess.py
 ├───Datasets/
-    ├───python_dedupe_definitions_v2.pkl
-    ├───python_licenses.pkl
     ├───Human_readable_sample/
         ├───data_preview.txt
     ├───python/
@@ -45,7 +44,6 @@ Project/
     ├───encoder.py
     ├───seq2seq.py
 ├───scripts/
-    ├───C2Orchestrator.py
     ├───README.md
 ├───src/
     ├───README.md
