@@ -3,36 +3,39 @@ import requests
 import zipfile
 import io
 
+# DOWNLOAD AND EXTRACTION OF CODESEARCHNET ROBUST DATASET
 def download_codesearchnet_robust(output_dir="Project/Datasets"):
-    # Mirror su Hugging Face Assets - il più stabile al momento
+
+    # Mirror on Hugging Face Assets - the most stable at the moment
     url = "https://huggingface.co/datasets/code_search_net/resolve/main/data/python.zip"
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    print(f"--- Tentativo di acquisizione via Hugging Face CDN ---")
+    print(f"--- Attempting acquisition via Hugging Face CDN ---")
     print(f"URL: {url}")
-    print("Download in corso (circa 900MB). Prendi un caffè...")
+    print("Download in progress (about 900MB). Grab a coffee...")
 
     try:
-        # User-agent per evitare blocchi bot
+        # Specifying the User-agent to avoid bot blocks
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, stream=True)
         response.raise_for_status()
 
-        # Usiamo BytesIO per non scrivere il file zip intero su disco prima di estrarlo
+        # Use BytesIO to avoid writing the entire zip file to disk before extracting
         with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
-            print("Download completato. Estrazione in corso...")
+            print("Download completed. Extracting...")
             zip_ref.extractall(output_dir)
         
-        print(f"SUCCESS: Dataset estratto in {output_dir}")
-        print("Struttura rilevata: " + str(os.listdir(output_dir)))
+        print(f"SUCCESS: Dataset extracted to {output_dir}")
+        print("Detected structure: " + str(os.listdir(output_dir)))
 
     except Exception as e:
-        print(f"FALLIMENTO CRITICO: {e}")
-        print("\n--- SOLUZIONE MANUALE ---")
-        print(f"Se lo script fallisce, scarica manualmente da qui: {url}")
-        print(f"E scompatta il contenuto in: {os.path.abspath(output_dir)}")
+        print(f"CRITICAL FAILURE: {e}")
+        print("\n--- MANUAL SOLUTION ---")
+        print(f"If the script fails, manually download from here: {url}")
+        print(f"And extract the contents to: {os.path.abspath(output_dir)}")
 
+# MAIN EXECUTION
 if __name__ == "__main__":
     download_codesearchnet_robust()

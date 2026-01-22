@@ -3,21 +3,27 @@ import json
 import os
 import glob
 
+# GENERATE HUMAN-READABLE SAMPLES FOR DATA INSPECTION
 def save_human_readable_samples(datasets_dir="Project/Datasets", output_subdir="Human_readable_sample", num_examples=100):
-    # Definiamo il percorso completo della cartella e del file
+
+    # Define the full path for the folder and file
     full_output_dir = os.path.join(datasets_dir, output_subdir)
     output_file = os.path.join(full_output_dir, "data_preview.txt")
     
-    # Creazione della sottocartella (Directory Encapsulation)
+    # Create the subfolder (Directory Encapsulation)
     if not os.path.exists(full_output_dir):
         os.makedirs(full_output_dir)
 
+    # Search for train files in all subdirectories
     search_pattern = os.path.join(datasets_dir, "**", "train", "*.jsonl.gz")
+
+    # Find all matching files using glob
     files = glob.glob(search_pattern, recursive=True)
 
     if not files:
         return None
 
+    # Write human-readable samples to the output file
     with open(output_file, "w", encoding="utf-8") as out:
         out.write(f"=== DATASET PREVIEW - CODE SEARCH NET (PYTHON) ===\n")
         out.write(f"Source File: {files[0]}\n\n")
@@ -37,5 +43,6 @@ def save_human_readable_samples(datasets_dir="Project/Datasets", output_subdir="
     
     return output_file
 
+# MAIN EXECUTION
 if __name__ == "__main__":
     save_human_readable_samples()
