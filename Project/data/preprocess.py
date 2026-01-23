@@ -65,9 +65,11 @@ def prepare_vocab(jsonl_base_dir, tokenizer_path):
     temp_text_file = "temp_corpus.txt"
     logger.info(f"Processing {len(train_files)} files in sandbox...")
     
-    # Extract clean code-doc pairs and write to temp file
     try:
+        # Extract clean code-doc pairs and write to temp file
         with open(temp_text_file, 'w', encoding='utf-8') as out:
+
+            # Iterate through all training files
             for file_path in train_files:
                 with gzip.open(file_path, 'rt', encoding='utf-8') as f:
                     for line in f:
@@ -85,7 +87,7 @@ def prepare_vocab(jsonl_base_dir, tokenizer_path):
                         if len(clean_doc) > 10 and len(code.split()) < 200:
                             out.write(code + "\n" + clean_doc + "\n")
         
-        # Train and save the BPE tokenizer
+        # Train and save the BPE tokenizer on training data
         train_bpe_tokenizer([temp_text_file], tokenizer_path)
         
     finally:
