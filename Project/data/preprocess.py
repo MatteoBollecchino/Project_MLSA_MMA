@@ -71,6 +71,7 @@ def prepare_vocab(jsonl_base_dir, tokenizer_path):
 
             # Iterate through all training files
             for file_path in train_files:
+                # rt = read text mode
                 with gzip.open(file_path, 'rt', encoding='utf-8') as f:
                     for line in f:
                         # Load JSON line

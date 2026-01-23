@@ -9,16 +9,14 @@ class Attention(nn.Module):
         self.v = nn.Linear(hid_dim, 1, bias=False)
         
     def forward(self, hidden, encoder_outputs):
-        # hidden: [batch_size, hid_dim] -> ultimo stato del decoder
+        # hidden: [batch_size, hid_dim] (ultimo stato del decoder)
         # encoder_outputs: [batch_size, src_len, hid_dim]
-        
-        batch_size = encoder_outputs.shape[0]
         src_len = encoder_outputs.shape[1]
         
-        # Ripeti lo stato nascosto per ogni step dell'encoder
+        # Ripeti hidden per ogni step temporale del sorgente
         hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
-        attention = self.v(energy).squeeze(2)
-        # attention: [batch_size, src_len]
         
+        attention = self.v(energy).squeeze(2)
+        # Softmax per ottenere una distribuzione di probabilità (somma = 1)
         return F.softmax(attention, dim=1)
