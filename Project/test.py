@@ -35,7 +35,6 @@ def is_adult(age):
         return
 
     model.eval()
-
     # 3. Trasformazione dell'Input (Symbolic Mapping)
     # Aggiungiamo manualmente i tag di inizio (1) e fine (2)
     encoded = tokenizer.encode(code_to_summarize).ids

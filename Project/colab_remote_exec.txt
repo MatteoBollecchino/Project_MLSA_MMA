@@ -1,0 +1,52 @@
+# ==============================================================================
+# MLSA PROJECT - R&D MASTER PIPELINE (COLAB EDITION)
+# ==============================================================================
+
+# 1. AGGANCIO AL CLOUD STORAGE (Persistenza Risultati)
+from google.colab import drive
+import os
+import sys
+import torch
+
+print("--- [FASE 1] MOUNT E MAPPATURA PERCORSI ---")
+drive.mount('/content/drive', force_remount=True)
+
+# Percorso validato dallo Scanner (Chirurgicamente esatto)
+PROJECT_ROOT = "/content/drive/MyDrive/LifeLineV4/PROGETTI/Universita/Software_Science_And_Technology/MACHINE LEARNING FOR SOFTWARE ANALYSIS/PROJECT__MLSA_MMA/COLAB/Project_MLSA_MMA/Project"
+
+if not os.path.exists(PROJECT_ROOT):
+    print(f"❌ ERRORE CRITICO: Il percorso {PROJECT_ROOT} non esiste.")
+    print("Controlla se hai cambiato i nomi delle cartelle (es. PROGETTI vs Progetti).")
+else:
+    # Cambiamo directory di lavoro (Context Shift)
+    %cd "{PROJECT_ROOT}"
+    # Iniezione nel path di sistema per risolvere i moduli 'models' e 'data'
+    if PROJECT_ROOT not in sys.path:
+        sys.path.append(PROJECT_ROOT)
+    print(f"✅ Directory di lavoro: {os.getcwd()}")
+
+# 2. AUDIT HARDWARE (Hardware-Software Alignment)
+print("\n--- [FASE 2] AUDIT HARDWARE ---")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if device == "cuda":
+    print(f"🚀 GPU RILEVATA: {torch.cuda.get_device_name(0)}")
+    print(f"📊 VRAM DISPONIBILE: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+else:
+    print("⚠️ ATTENZIONE: GPU NON RILEVATA! Controlla 'Runtime -> Cambia tipo di runtime'.")
+
+# 3. PROVISIONING DIPENDENZE (Ambiente Isolato)
+print("\n--- [FASE 3] INSTALLAZIONE STRUMENTI ---")
+!pip install tokenizers tqdm nltk rouge-score -q
+
+# 4. ESECUZIONE ORCHESTRATORE (L'Attacco Finale)
+# --subset 50000: Massa critica per eliminare il bias "DataFrame"
+# --batch_size 128: Saturazione ottimale per GPU T4 con AMP (Automatic Mixed Precision)
+# --epochs 10: Finestra di convergenza standard
+# --force_train: Ignora eventuali residui e crea un nuovo file versionato
+print("\n--- [FASE 4] AVVIO ADDESTRAMENTO PESANTE ---")
+!python C2Orchestrator.py \
+    --epochs 10 \
+    --batch_size 128 \
+    --force_train
+
+print("\n--- PIPELINE COMPLETATA CON SUCCESSO ---")

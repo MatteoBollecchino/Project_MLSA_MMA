@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-23 16:31:22
+Generated on: 2026-01-23 22:45:51
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -214,91 +214,205 @@ roadmap_operativa:
 ---------------------------------------------
 
 import torch
-import torch.nn.functional as F
 from tokenizers import Tokenizer
 from models.factory import get_model_architecture
 
-def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30):
+def run_quick_test():
+    # --- CONFIGURAZIONE ---
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_tag = "lstm_attention"
+    tokenizer_path = "Project/tokenizer.json"
+    checkpoint_path = f"Project/models/checkpoints/best_{model_tag}.pt"
+    
+    # --- IL TUO CODICE DA TESTARE ---
+    # Scrivo io una funzione che filtra numeri pari da una lista
+    code_to_summarize = """
+def is_adult(age):
+    if age >= 18:
+        return True
+    else:
+        return False
+    """
+
+    print(f"[*] Caricamento componenti per {model_tag}...")
+    
+    # 1. Caricamento Tokenizer e Modello
+    tokenizer = Tokenizer.from_file(tokenizer_path)
+    # Usiamo la factory per avere la stessa struttura usata nel C2
+    model = get_model_architecture(model_tag, device, vocab_size=10000)
+    
+    # 2. Caricamento Pesi (Stato Cristallizzato)
+    try:
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        print(f"[+] Pesi caricati correttamente da {checkpoint_path}")
+    except FileNotFoundError:
+        print(f"[!] ERRORE: Non trovo il checkpoint. Hai fatto girare il C2Orchestrator?")
+        return
+
+    model.eval()
+
+    # 3. Trasformazione dell'Input (Symbolic Mapping)
+    # Aggiungiamo manualmente i tag di inizio (1) e fine (2)
+    encoded = tokenizer.encode(code_to_summarize).ids
+    src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
+
+    print(f"[*] Analisi codice in corso...")
+
+    # 4. Loop di Generazione (Greedy Search)
+    with torch.no_grad():
+        # L'Encoder crea il pensiero astratto (context)
+        encoder_outputs, hidden, cell = model.encoder(src_tensor)
+        
+        # Iniziamo la frase con <SOS>
+        input_token = torch.LongTensor([tokenizer.token_to_id("<SOS>")]).to(device)
+        predicted_indices = []
+
+        for _ in range(30): # Massimo 30 parole per il riassunto
+            output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+            
+            # Prendiamo il token più probabile
+            top1 = output.argmax(1)
+            token_id = top1.item()
+            
+            if token_id == tokenizer.token_to_id("<EOS>"):
+                break
+                
+            predicted_indices.append(token_id)
+            input_token = top1 # Il predetto diventa il prossimo input
+
+    # 5. Output Finale
+    prediction = tokenizer.decode(predicted_indices)
+    
+    print("\n" + "="*30)
+    print("CODICE INPUT:")
+    print(code_to_summarize.strip())
+    print("-" * 30)
+    print("RIASSUNTO PREDETTO:")
+    print(f">>> {prediction}")
+    print("="*30)
+
+if __name__ == "__main__":
+    run_quick_test()
+
+================================================================================
+
+--- FILE: test_audit.py | PATH: Project\test_audit.py ---
+---------------------------------------------------------
+
+import torch
+import torch.nn.functional as F
+import json
+import gzip
+import os
+import glob
+import random
+from tokenizers import Tokenizer
+from models.factory import get_model_architecture
+
+# --- LOGICA DI GENERAZIONE (BEAM SEARCH CON TEMPERATURA) ---
+def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, temp=1.2):
     device = src_tensor.device
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
 
-    # 1. Encoding: L'encoder analizza il codice una sola volta
     with torch.no_grad():
         encoder_outputs, hidden, cell = model.encoder(src_tensor)
 
-    # 2. Inizializzazione del "Beam"
-    # Ogni elemento: (punteggio_logaritmico, sequenza_token, hidden, cell)
     beams = [(0.0, [sos_id], hidden, cell)]
 
     for _ in range(max_len):
         candidates = []
         for log_prob, tokens, h, c in beams:
-            # Se l'ipotesi è già terminata, la manteniamo così com'è
             if tokens[-1] == eos_id:
                 candidates.append((log_prob, tokens, h, c))
                 continue
 
-            # Previsione del prossimo token
             input_token = torch.LongTensor([tokens[-1]]).to(device)
             with torch.no_grad():
                 output, h_next, c_next = model.decoder(input_token, h, c, encoder_outputs)
             
-            # Calcoliamo le log-probabilità per evitare l'underflow numerico
-            log_probs = F.log_softmax(output, dim=1)
-            
-            # Prendiamo i top-k candidati per questo specifico ramo
-            topk_probs, topk_ids = log_probs.topk(beam_width)
+            # Applichiamo la temperatura per ammorbidire la distribuzione
+            probs = F.log_softmax(output / temp, dim=1)
+            topk_probs, topk_ids = probs.topk(beam_width)
 
             for i in range(beam_width):
                 next_log_prob = log_prob + topk_probs[0][i].item()
                 next_tokens = tokens + [topk_ids[0][i].item()]
                 candidates.append((next_log_prob, next_tokens, h_next, c_next))
 
-        # 3. Selezione: Teniamo solo i 'beam_width' migliori tra tutti i rami espansi
         beams = sorted(candidates, key=lambda x: x[0], reverse=True)[:beam_width]
-
-        # Se tutti i beam hanno raggiunto <EOS>, ci fermiamo
         if all(b[1][-1] == eos_id for b in beams):
             break
 
-    # Restituiamo la sequenza con il punteggio più alto
-    best_tokens = beams[0][1]
-    return best_tokens
+    return beams[0][1]
 
-def run_quick_test():
+def load_random_samples(data_dir, split, num_samples=2):
+    """Carica campioni casuali dai file compressi del dataset."""
+    search_pattern = os.path.join(data_dir, split, "*.jsonl.gz")
+    files = glob.glob(search_pattern)
+    if not files: return []
+    
+    samples = []
+    with gzip.open(random.choice(files), 'rt', encoding='utf-8') as f:
+        lines = f.readlines()
+        chosen = random.sample(lines, min(num_samples, len(lines)))
+        for c in chosen:
+            item = json.loads(c)
+            samples.append({
+                'code': item.get('code', item.get('func_code_string', '')),
+                'doc': item.get('docstring', item.get('func_documentation_string', ''))
+            })
+    return samples
+
+def run_deep_audit():
+    # --- CONFIG ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_tag = "lstm_attention"
-    tokenizer_path = "Project/tokenizer.json"
-    checkpoint_path = f"Project/models/checkpoints/best_{model_tag}.pt"
+    tokenizer = Tokenizer.from_file("Project/tokenizer.json")
+    model = get_model_architecture("lstm_attention", device)
+    checkpoint = "Project/models/checkpoints/best_lstm_attention.pt"
     
-    code_to_summarize = "def add(a, b): return a + b"
-
-    tokenizer = Tokenizer.from_file(tokenizer_path)
-    model = get_model_architecture(model_tag, device, vocab_size=10000)
-    
-    try:
-        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-        model.eval()
-    except:
-        print("[!] Checkpoint non trovato.")
+    if not os.path.exists(checkpoint):
+        print("[!] Errore: Nessun checkpoint trovato.")
         return
+    model.load_state_dict(torch.load(checkpoint, map_location=device))
+    model.eval()
 
-    # Preprocessing
-    encoded = tokenizer.encode(code_to_summarize).ids
-    src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
-
-    # Generazione con Beam Search
-    predicted_indices = beam_search_decode(model, src_tensor, tokenizer, beam_width=5)
-
-    # Sanitizzazione (Soluzione per la 'Ġ' e rimozione token speciali)
-    prediction = tokenizer.decode(predicted_indices, skip_special_tokens=True)
-    prediction = prediction.replace('Ġ', ' ').strip()
+    # --- SORGENTI DATI ---
+    data_root = "Project/Datasets/python/final/jsonl"
     
-    print(f"\nRESULT: {prediction}")
+    # 1. Test di Memorizzazione (da Train)
+    train_samples = load_random_samples(data_root, "train", 2)
+    # 2. Test di Generalizzazione (da Test/Valid)
+    test_samples = load_random_samples(data_root, "test", 2)
+    # 3. Test di Iniezione (Codice mai visto, scritto da noi)
+    custom_samples = [
+        {"code": "def power(a, b): return a ** b", "doc": "Calculates power of a number."},
+        {"code": "def check_empty(l): return len(l) == 0", "doc": "Checks if list is empty."}
+    ]
+
+    suites = {"TRAIN (Memorization)": train_samples, "TEST (Generalization)": test_samples, "CUSTOM (Injection)": custom_samples}
+
+    print(f"\n{'='*80}\nSTARTING MODEL AUDIT: {device}\n{'='*80}")
+
+    for suite_name, samples in suites.items():
+        print(f"\n>>> SUITE: {suite_name}")
+        for i, s in enumerate(samples):
+            # Preprocessing
+            encoded = tokenizer.encode(s['code']).ids
+            src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
+            
+            # Predizione
+            ids = beam_search_decode(model, src_tensor, tokenizer)
+            prediction = tokenizer.decode(ids, skip_special_tokens=True).replace('Ġ', ' ').strip()
+            
+            print(f"\n  SAMPLE #{i+1}")
+            print(f"  CODE: {s['code'].replace(chr(10), ' ')[:70]}...")
+            print(f"  REAL: {s['doc'][:70]}...")
+            print(f"  PRED: {prediction}")
+            print(f"  {'-'*40}")
 
 if __name__ == "__main__":
-    run_quick_test()
+    run_deep_audit()
 
 ================================================================================
 
@@ -4806,6 +4920,107 @@ Questa cartella conterrà gli script eseguibili per lanciare le operazioni princ
 
 ================================================================================
 
+--- FILE: evaluate.py | PATH: Project\scripts\evaluate.py ---
+-------------------------------------------------------------
+
+import sys
+import os
+
+# --- FIX PERCORSI (PRINCIPLE OF RELATIVE CONTEXT) ---
+# Aggiunge la cartella genitore (Project) al sys.path affinché Python trovi 'models' e 'data'
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, ".."))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+import torch
+import logging
+from tqdm import tqdm
+from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
+from rouge_score import rouge_scorer
+from tokenizers import Tokenizer
+
+# Ora gli import funzioneranno correttamente
+from models.factory import get_model_architecture
+from data.dataset import get_dataloader
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
+class ModelEvaluator:
+    def __init__(self, model_tag="lstm_attention", subset_size=200):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.tokenizer_path = os.path.join(project_root, "tokenizer.json")
+        self.checkpoint_path = os.path.join(project_root, "models", "checkpoints", f"best_{model_tag}.pt")
+        self.data_path = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
+        
+        self.tokenizer = Tokenizer.from_file(self.tokenizer_path)
+        self.subset_size = subset_size
+        
+        # Caricamento Modello
+        self.model = get_model_architecture(model_tag, self.device)
+        if os.path.exists(self.checkpoint_path):
+            self.model.load_state_dict(torch.load(self.checkpoint_path, map_location=self.device))
+            print(f"[+] Pesi caricati da: {self.checkpoint_path}")
+        else:
+            print(f"[!] Checkpoint non trovato in {self.checkpoint_path}")
+            
+        self.model.eval()
+        
+        self.test_loader = get_dataloader(
+            self.data_path, "test", 
+            self.tokenizer_path, batch_size=1, subset=subset_size
+        )
+
+    def run_evaluation(self):
+        references = []
+        hypotheses = []
+        
+        print(f"[*] Avvio Valutazione Quantitativa su {self.subset_size} campioni...")
+        
+        with torch.no_grad():
+            for src, trg in tqdm(self.test_loader):
+                src = src.to(self.device)
+                
+                # Generazione Greedy
+                encoder_outputs, hidden, cell = self.model.encoder(src)
+                input_token = torch.LongTensor([self.tokenizer.token_to_id("<SOS>")]).to(self.device)
+                
+                predicted_indices = []
+                for _ in range(30):
+                    output, hidden, cell = self.model.decoder(input_token, hidden, cell, encoder_outputs)
+                    top1 = output.argmax(1)
+                    token_id = top1.item()
+                    if token_id == self.tokenizer.token_to_id("<EOS>"): break
+                    predicted_indices.append(token_id)
+                    input_token = top1
+
+                # Decodifica e pulizia (Byte-Level BPE fix)
+                pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).replace('Ġ', ' ').strip()
+                real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).replace('Ġ', ' ').strip()
+                
+                hypotheses.append(pred_text.split())
+                references.append([real_text.split()])
+
+        # --- CALCOLO METRICHE ---
+        bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
+        scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
+        rouge1 = sum(scorer.score(" ".join(r[0]), " ".join(h))['rouge1'].fmeasure for h, r in zip(hypotheses, references)) / len(hypotheses)
+        
+        self.print_report(bleu, rouge1, hypotheses)
+
+    def print_report(self, bleu, rouge, hypotheses):
+        # ... (stessa logica del report precedente)
+        print("\n" + "="*50)
+        print(f"BLEU: {bleu:.4f} | ROUGE: {rouge:.4f}")
+        print("="*50)
+
+if __name__ == "__main__":
+    evaluator = ModelEvaluator()
+    evaluator.run_evaluation()
+
+================================================================================
+
 --- FILE: train.py | PATH: Project\scripts\train.py ---
 -------------------------------------------------------
 
@@ -4818,11 +5033,28 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 def train_model(model, train_loader, valid_loader, config, device):
+    # --- FASE 0: AUDIT HARDWARE & MODELLO (PRINCIPLE OF OBSERVABILITY) ---
+    logger.info("="*50)
+    logger.info("AUDIT ESECUZIONE TRAINING")
+    logger.info(f"Target Device: {device.type.upper()}")
+    
+    if device.type == 'cuda':
+        logger.info(f"GPU Model: {torch.cuda.get_device_name(0)}")
+        logger.info(f"VRAM Totale: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        logger.info("Mixed Precision: ABILITATA (torch.amp.autocast)")
+    else:
+        logger.warning("ATTENZIONE: Esecuzione su CPU. Il processo sarà lento.")
+        logger.info("Mixed Precision: DISABILITATA (Non supportata su CPU standard)")
+
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Parametri Addestrabili: {total_params:,}")
+    logger.info("="*50)
+
+    # Inizializzazione standard
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
-    # Lo scaler rimane sotto cuda se usiamo CUDA, 
-    # ma autocast trasloca nel modulo amp generale.
+    # Scaler per AMP
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
 
     best_valid_loss = float('inf')
@@ -4836,8 +5068,7 @@ def train_model(model, train_loader, valid_loader, config, device):
             src, trg = src.to(device, non_blocking=True), trg.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
 
-            # --- NUOVA SINTASSI AUTOCAST ---
-            # Specifichiamo esplicitamente il backend ('cuda')
+            # Esecuzione con Autocast (Automatic Mixed Precision)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
                 output = model(src, trg)
                 output_dim = output.shape[-1]
@@ -4855,10 +5086,17 @@ def train_model(model, train_loader, valid_loader, config, device):
                 optimizer.step()
 
             train_loss += loss.item()
-            pbar.set_postfix(loss=f"{loss.item():.4f}")
+            pbar.set_postfix(loss=f"{loss.item():.4f}", gpu_mem=f"{torch.cuda.memory_allocated(0)/1e9:.1f}GB" if device.type == 'cuda' else "N/A")
 
+        # Validazione
         valid_loss = evaluate_validation(model, valid_loader, criterion, device)
-        logger.info(f"Epoch {epoch+1} | Train Loss: {train_loss/len(train_loader):.4f} | Val Loss: {valid_loss:.4f}")
+        
+        status_msg = f"Epoch {epoch+1} FINISHED | Train Loss: {train_loss/len(train_loader):.4f} | Val Loss: {valid_loss:.4f}"
+        if valid_loss < best_valid_loss:
+            best_valid_loss = valid_loss
+            status_msg += " [NEW BEST]"
+        
+        logger.info(status_msg)
 
 def evaluate_validation(model, loader, criterion, device):
     model.eval()
@@ -4866,7 +5104,6 @@ def evaluate_validation(model, loader, criterion, device):
     with torch.no_grad():
         for src, trg in loader:
             src, trg = src.to(device, non_blocking=True), trg.to(device, non_blocking=True)
-            # Anche qui, usiamo autocast per coerenza computazionale (opzionale ma consigliato)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
                 output = model(src, trg, teacher_forcing_ratio=0)
                 output_dim = output.shape[-1]
