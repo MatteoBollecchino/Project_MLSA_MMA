@@ -54,7 +54,7 @@ class CodeSummarizationPipeline:
             return
 
         # FASE 3: TRAINING
-        experiment_queue = ["lstm_attention"]
+        experiment_queue = ["transformer"]
         
         # Inizializzazione loader con i percorsi dinamici
         train_loader = get_dataloader(self.jsonl_base, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
