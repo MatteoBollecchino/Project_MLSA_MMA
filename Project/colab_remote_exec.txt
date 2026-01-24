@@ -45,7 +45,8 @@ print("\n--- [FASE 3] INSTALLAZIONE STRUMENTI ---")
 # --force_train: Ignora eventuali residui e crea un nuovo file versionato
 print("\n--- [FASE 4] AVVIO ADDESTRAMENTO PESANTE ---")
 !python C2Orchestrator.py \
-    --epochs 10 \
+    --subset 50000 \
+    --epochs 5 \
     --batch_size 128 \
     --force_train
 
