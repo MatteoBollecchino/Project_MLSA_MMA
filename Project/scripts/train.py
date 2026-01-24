@@ -7,30 +7,19 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 def train_model(model, train_loader, valid_loader, config, device):
-    # --- FASE 0: AUDIT HARDWARE & MODELLO (PRINCIPLE OF OBSERVABILITY) ---
-    logger.info("="*50)
-    logger.info("AUDIT ESECUZIONE TRAINING")
-    logger.info(f"Target Device: {device.type.upper()}")
-    
-    if device.type == 'cuda':
-        logger.info(f"GPU Model: {torch.cuda.get_device_name(0)}")
-        logger.info(f"VRAM Totale: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
-        logger.info("Mixed Precision: ABILITATA (torch.amp.autocast)")
-    else:
-        logger.warning("ATTENZIONE: Esecuzione su CPU. Il processo sarà lento.")
-        logger.info("Mixed Precision: DISABILITATA (Non supportata su CPU standard)")
-
+    # --- FASE 0: AUDIT HARDWARE & MODELLO ---
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Parametri Addestrabili: {total_params:,}")
-    logger.info("="*50)
+    logger.info(f"🚀 TRAINING START | Params: {total_params:,} | Device: {device}")
 
-    # Inizializzazione standard
+    # Inizializzazione con L2 Regularization (Weight Decay)
+    # Il weight_decay forza i pesi piccoli, rendendo difficile la memorizzazione esatta.
     criterion = nn.CrossEntropyLoss(ignore_index=0)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-5)
     
-    # Scaler per AMP
+    # Scheduler: Riduce la LR se la Val Loss smette di scendere (Punto di sella)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1)
+    
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
-
     best_valid_loss = float('inf')
 
     for epoch in range(config.epochs):
@@ -42,9 +31,10 @@ def train_model(model, train_loader, valid_loader, config, device):
             src, trg = src.to(device, non_blocking=True), trg.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
 
-            # Esecuzione con Autocast (Automatic Mixed Precision)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                output = model(src, trg)
+                # Ridurre gradualmente il teacher forcing durante le epoche
+                tf_ratio = max(0.2, 0.5 - (epoch * 0.1)) 
+                output = model(src, trg, teacher_forcing_ratio=tf_ratio)
                 output_dim = output.shape[-1]
                 loss = criterion(output[:, 1:].reshape(-1, output_dim), trg[:, 1:].reshape(-1))
 
@@ -60,15 +50,16 @@ def train_model(model, train_loader, valid_loader, config, device):
                 optimizer.step()
 
             train_loss += loss.item()
-            pbar.set_postfix(loss=f"{loss.item():.4f}", gpu_mem=f"{torch.cuda.memory_allocated(0)/1e9:.1f}GB" if device.type == 'cuda' else "N/A")
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
-        # Validazione
+        # Validazione e Scheduling
         valid_loss = evaluate_validation(model, valid_loader, criterion, device)
+        scheduler.step(valid_loss) # Adattamento dinamico della LR
         
-        status_msg = f"Epoch {epoch+1} FINISHED | Train Loss: {train_loss/len(train_loader):.4f} | Val Loss: {valid_loss:.4f}"
+        status_msg = f"Epoch {epoch+1} | Train Loss: {train_loss/len(train_loader):.4f} | Val Loss: {valid_loss:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}"
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
-            status_msg += " [NEW BEST]"
+            status_msg += " 🔥 [NEW BEST]"
         
         logger.info(status_msg)
 
@@ -77,9 +68,9 @@ def evaluate_validation(model, loader, criterion, device):
     epoch_loss = 0
     with torch.no_grad():
         for src, trg in loader:
-            src, trg = src.to(device, non_blocking=True), trg.to(device, non_blocking=True)
+            src, trg = src.to(device), trg.to(device)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                output = model(src, trg, teacher_forcing_ratio=0)
+                output = model(src, trg, teacher_forcing_ratio=0) # Zero TF in validazione
                 output_dim = output.shape[-1]
                 loss = criterion(output[:, 1:].reshape(-1, output_dim), trg[:, 1:].reshape(-1))
                 epoch_loss += loss.item()

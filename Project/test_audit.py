@@ -5,10 +5,20 @@ import gzip
 import os
 import glob
 import random
+import sys
 from tokenizers import Tokenizer
+
+# --- [FASE 1] NORMALIZZAZIONE DETERMINISTICA ---
+# Essendo lo script nella Root, project_root è la cartella dello script stesso
+project_root = os.path.dirname(os.path.abspath(__file__))
+
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+# Ora l'import dei tuoi modelli funzionerà senza errori di modulo
 from models.factory import get_model_architecture
 
-# --- LOGICA DI GENERAZIONE (BEAM SEARCH CON TEMPERATURA) ---
+# --- LOGICA DI DECODIFICA AVANZATA ---
 def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, temp=1.2):
     device = src_tensor.device
     sos_id = tokenizer.token_to_id("<SOS>")
@@ -30,7 +40,7 @@ def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, t
             with torch.no_grad():
                 output, h_next, c_next = model.decoder(input_token, h, c, encoder_outputs)
             
-            # Applichiamo la temperatura per ammorbidire la distribuzione
+            # Distribuzione di probabilità con Temperatura: P = softmax(logits / T)
             probs = F.log_softmax(output / temp, dim=1)
             topk_probs, topk_ids = probs.topk(beam_width)
 
@@ -45,70 +55,91 @@ def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, t
 
     return beams[0][1]
 
+# --- DATA LOADING ---
 def load_random_samples(data_dir, split, num_samples=2):
-    """Carica campioni casuali dai file compressi del dataset."""
     search_pattern = os.path.join(data_dir, split, "*.jsonl.gz")
     files = glob.glob(search_pattern)
     if not files: return []
     
     samples = []
-    with gzip.open(random.choice(files), 'rt', encoding='utf-8') as f:
-        lines = f.readlines()
-        chosen = random.sample(lines, min(num_samples, len(lines)))
-        for c in chosen:
-            item = json.loads(c)
-            samples.append({
-                'code': item.get('code', item.get('func_code_string', '')),
-                'doc': item.get('docstring', item.get('func_documentation_string', ''))
-            })
+    try:
+        with gzip.open(random.choice(files), 'rt', encoding='utf-8') as f:
+            lines = f.readlines()
+            chosen = random.sample(lines, min(num_samples, len(lines)))
+            for c in chosen:
+                item = json.loads(c)
+                samples.append({
+                    'code': item.get('code', item.get('func_code_string', '')),
+                    'doc': item.get('docstring', item.get('func_documentation_string', ''))
+                })
+    except: pass
     return samples
 
+# --- CORE AUDIT ENGINE ---
 def run_deep_audit():
-    # --- CONFIG ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = Tokenizer.from_file("Project/tokenizer.json")
-    model = get_model_architecture("lstm_attention", device)
-    checkpoint = "Project/models/checkpoints/best_lstm_attention.pt"
     
-    if not os.path.exists(checkpoint):
-        print("[!] Errore: Nessun checkpoint trovato.")
+    # Mapping risorse basato sulla nuova Root
+    tokenizer_path = os.path.join(project_root, "tokenizer.json")
+    checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
+    data_root = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
+
+    if not os.path.exists(tokenizer_path):
+        print(f"❌ Tokenizer non trovato in: {tokenizer_path}")
         return
-    model.load_state_dict(torch.load(checkpoint, map_location=device))
-    model.eval()
 
-    # --- SORGENTI DATI ---
-    data_root = "Project/Datasets/python/final/jsonl"
+    tokenizer = Tokenizer.from_file(tokenizer_path)
     
-    # 1. Test di Memorizzazione (da Train)
-    train_samples = load_random_samples(data_root, "train", 2)
-    # 2. Test di Generalizzazione (da Test/Valid)
-    test_samples = load_random_samples(data_root, "test", 2)
-    # 3. Test di Iniezione (Codice mai visto, scritto da noi)
-    custom_samples = [
-        {"code": "def power(a, b): return a ** b", "doc": "Calculates power of a number."},
-        {"code": "def check_empty(l): return len(l) == 0", "doc": "Checks if list is empty."}
-    ]
+    # 1. Recupero Checkpoints
+    if not os.path.exists(checkpoint_dir):
+        print(f"❌ Directory checkpoints non trovata: {checkpoint_dir}")
+        return
+        
+    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
+    if not checkpoints:
+        print("❌ Nessun file .pt trovato.")
+        return
 
-    suites = {"TRAIN (Memorization)": train_samples, "TEST (Generalization)": test_samples, "CUSTOM (Injection)": custom_samples}
+    # 2. Preparazione Suite di Test
+    suites = {
+        "TRAIN (Memorization)": load_random_samples(data_root, "train", 2),
+        "TEST (Generalization)": load_random_samples(data_root, "test", 2),
+        "CUSTOM (Injection)": [
+            {"code": "def power(a, b): return a ** b", "doc": "Calculates power of a number."},
+            {"code": "def check_empty(l): return len(l) == 0", "doc": "Checks if list is empty."}
+        ]
+    }
 
-    print(f"\n{'='*80}\nSTARTING MODEL AUDIT: {device}\n{'='*80}")
+    print(f"\n{'='*80}\n🚀 STARTING BATCH AUDIT ON {len(checkpoints)} MODELS\n{'='*80}")
 
-    for suite_name, samples in suites.items():
-        print(f"\n>>> SUITE: {suite_name}")
-        for i, s in enumerate(samples):
-            # Preprocessing
-            encoded = tokenizer.encode(s['code']).ids
-            src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
-            
-            # Predizione
-            ids = beam_search_decode(model, src_tensor, tokenizer)
-            prediction = tokenizer.decode(ids, skip_special_tokens=True).replace('Ġ', ' ').strip()
-            
-            print(f"\n  SAMPLE #{i+1}")
-            print(f"  CODE: {s['code'].replace(chr(10), ' ')[:70]}...")
-            print(f"  REAL: {s['doc'][:70]}...")
-            print(f"  PRED: {prediction}")
-            print(f"  {'-'*40}")
+    for ckpt_name in sorted(checkpoints):
+        print(f"\n🔍 ANALYZING CHECKPOINT: {ckpt_name}")
+        
+        # Determina architettura (Transformer se specificato nel nome, altrimenti LSTM)
+        model_tag = "transformer" if "transformer" in ckpt_name.lower() else "lstm_attention"
+        
+        try:
+            model = get_model_architecture(model_tag, device)
+            ckpt_path = os.path.join(checkpoint_dir, ckpt_name)
+            model.load_state_dict(torch.load(ckpt_path, map_location=device))
+            model.eval()
+
+            for suite_name, samples in suites.items():
+                print(f"\n  >>> SUITE: {suite_name}")
+                for i, s in enumerate(samples):
+                    encoded = tokenizer.encode(s['code']).ids
+                    # SOS=1, EOS=2 (verifica se i tuoi ID corrispondono)
+                    src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
+                    
+                    ids = beam_search_decode(model, src_tensor, tokenizer)
+                    prediction = tokenizer.decode(ids, skip_special_tokens=True).replace('Ġ', ' ').strip()
+                    
+                    print(f"    SAMPLE #{i+1} | CODE: {s['code'].strip()[:50]}...")
+                    print(f"    REAL: {s['doc'][:60]}...")
+                    print(f"    PRED: {prediction}")
+                    print(f"    {'-'*20}")
+        except Exception as e:
+            print(f"    ❌ Errore durante l'audit di {ckpt_name}: {e}")
 
 if __name__ == "__main__":
     run_deep_audit()

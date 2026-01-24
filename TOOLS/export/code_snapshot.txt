@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-23 22:45:51
+Generated on: 2026-01-24 15:12:57
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -10,11 +10,13 @@ import os
 import argparse
 import logging
 import torch
+from datetime import datetime
+
+# Import interni
 from data.download_dataset import download_codesearchnet_robust
 from data.inspect_dataset import save_human_readable_samples
 from data.preprocess import prepare_vocab
 from data.dataset import get_dataloader
-
 from models.factory import get_model_architecture
 from scripts.train import train_model 
 
@@ -24,14 +26,22 @@ logger = logging.getLogger(__name__)
 class CodeSummarizationPipeline:
     def __init__(self, config):
         self.config = config
-        self.data_root = "Project/Datasets"
+        
+        # --- LOGICA DI AUTO-IDENTIFICAZIONE (Mental Model: Context Encapsulation) ---
+        # Otteniamo la cartella dove si trova FISICAMENTE questo script (C2Orchestrator.py)
+        self.root = os.path.dirname(os.path.abspath(__file__))
+        
+        # Definiamo i percorsi partendo dalla root dello script
+        self.data_root = os.path.join(self.root, "Datasets")
         self.jsonl_base = os.path.join(self.data_root, "python", "final", "jsonl")
-        self.tokenizer_path = "Project/tokenizer.json"
+        self.tokenizer_path = os.path.join(self.root, "tokenizer.json")
+        self.checkpoint_dir = os.path.join(self.root, "models", "checkpoints")
         self.preview_subdir = "Human_readable_sample"
-        self.checkpoint_dir = "Project/models/checkpoints"
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"Hardware Target: {self.device}")
+        
+        logger.info(f"[*] Pipeline Root identificata in: {self.root}")
+        logger.info(f"[*] Hardware Target: {self.device}")
 
     def run(self):
         logger.info("--- MASTER PIPELINE START ---")
@@ -51,30 +61,27 @@ class CodeSummarizationPipeline:
             logger.info("Fase 4: Modalità ispezione attiva. Fine corsa.")
             return
 
-        # FASE 3: BENCHMARKING MULTI-MODELLO
-        experiment_queue = ["lstm_attention", "transformer"]
+        # FASE 3: TRAINING
+        experiment_queue = ["lstm_attention"]
         
-        # Inizializzazione flussi (ottimizzata: una sola volta)
+        # Inizializzazione loader con i percorsi dinamici
         train_loader = get_dataloader(self.jsonl_base, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
         valid_loader = get_dataloader(self.jsonl_base, "valid", self.tokenizer_path, self.config.batch_size, subset=self.config.subset // 5 if self.config.subset else None)
 
         for model_tag in experiment_queue:
-            model_save_path = os.path.join(self.checkpoint_dir, f"best_{model_tag}.pt")
+            # Versioning immutabile con Timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            subset_tag = f"sub{self.config.subset}" if self.config.subset else "all"
+            filename = f"{timestamp}_{model_tag}_{subset_tag}.pt"
+            model_save_path = os.path.join(self.checkpoint_dir, filename)
             
             logger.info(f"\n" + "-"*60)
-            logger.info(f"TARGET: {model_tag.upper()}")
-            
-            # --- GUARDIA DI IDEMPOTENZA ---
-            if os.path.exists(model_save_path) and not self.config.force_train:
-                logger.info(f"STATUS: Checkpoint rilevato in {model_save_path}. SKIP TRAINING.")
-                continue
+            logger.info(f"TARGET: {model_tag.upper()} | OUTPUT: {filename}")
             
             try:
-                # 1. Istanziazione Dinamica
                 model = get_model_architecture(model_tag, self.device)
                 
-                # 2. Addestramento
-                logger.info(f"STATUS: Avvio addestramento per {model_tag}...")
+                logger.info(f"STATUS: Avvio addestramento...")
                 train_model(
                     model=model, 
                     train_loader=train_loader, 
@@ -83,13 +90,10 @@ class CodeSummarizationPipeline:
                     device=self.device
                 )
                 
-                # 3. Cristallizzazione dello stato
                 os.makedirs(self.checkpoint_dir, exist_ok=True)
                 torch.save(model.state_dict(), model_save_path)
-                logger.info(f"SUCCESS: Modello {model_tag} salvato.")
+                logger.info(f"SUCCESS: Modello salvato in {model_save_path}")
 
-            except NotImplementedError:
-                logger.warning(f"SKIP: L'architettura '{model_tag}' è ancora un'idea teorica (Placeholder).")
             except Exception as e:
                 logger.error(f"FAILURE: Errore nell'esperimento {model_tag}: {e}")
                 continue 
@@ -97,23 +101,77 @@ class CodeSummarizationPipeline:
         logger.info("\n--- PIPELINE ESEGUITA ---")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="C2 Orchestrator")
-    
-    # Scaling e Velocità
-    parser.add_argument("--subset", type=int, default=None, help="Sottoinsieme per test rapidi (es. 1000)")
+    parser = argparse.ArgumentParser(description="C2 Orchestrator V3")
+    parser.add_argument("--subset", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=32)
-    
-    # Controllo Idempotenza
     parser.add_argument("--force_download", action="store_true")
     parser.add_argument("--force_preprocess", action="store_true")
-    parser.add_argument("--force_train", action="store_true", help="Ignora i checkpoint e ri-addestra tutto")
+    parser.add_argument("--force_train", action="store_true")
     parser.add_argument("--skip_train", action="store_true")
     
     args = parser.parse_args()
-    
     pipeline = CodeSummarizationPipeline(args)
     pipeline.run()
+
+================================================================================
+
+--- FILE: colab_remote_exec.txt | PATH: Project\colab_remote_exec.txt ---
+-------------------------------------------------------------------------
+
+# ==============================================================================
+# MLSA PROJECT - R&D MASTER PIPELINE (COLAB EDITION)
+# ==============================================================================
+
+# 1. AGGANCIO AL CLOUD STORAGE (Persistenza Risultati)
+from google.colab import drive
+import os
+import sys
+import torch
+
+print("--- [FASE 1] MOUNT E MAPPATURA PERCORSI ---")
+drive.mount('/content/drive', force_remount=True)
+
+# Percorso validato dallo Scanner (Chirurgicamente esatto)
+PROJECT_ROOT = "/content/drive/MyDrive/LifeLineV4/PROGETTI/Universita/Software_Science_And_Technology/MACHINE LEARNING FOR SOFTWARE ANALYSIS/PROJECT__MLSA_MMA/COLAB/Project_MLSA_MMA/Project"
+
+if not os.path.exists(PROJECT_ROOT):
+    print(f"❌ ERRORE CRITICO: Il percorso {PROJECT_ROOT} non esiste.")
+    print("Controlla se hai cambiato i nomi delle cartelle (es. PROGETTI vs Progetti).")
+else:
+    # Cambiamo directory di lavoro (Context Shift)
+    %cd "{PROJECT_ROOT}"
+    # Iniezione nel path di sistema per risolvere i moduli 'models' e 'data'
+    if PROJECT_ROOT not in sys.path:
+        sys.path.append(PROJECT_ROOT)
+    print(f"✅ Directory di lavoro: {os.getcwd()}")
+
+# 2. AUDIT HARDWARE (Hardware-Software Alignment)
+print("\n--- [FASE 2] AUDIT HARDWARE ---")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if device == "cuda":
+    print(f"🚀 GPU RILEVATA: {torch.cuda.get_device_name(0)}")
+    print(f"📊 VRAM DISPONIBILE: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+else:
+    print("⚠️ ATTENZIONE: GPU NON RILEVATA! Controlla 'Runtime -> Cambia tipo di runtime'.")
+
+# 3. PROVISIONING DIPENDENZE (Ambiente Isolato)
+print("\n--- [FASE 3] INSTALLAZIONE STRUMENTI ---")
+!pip install tokenizers tqdm nltk rouge-score -q
+
+# 4. ESECUZIONE ORCHESTRATORE (L'Attacco Finale)
+# --subset 50000: Massa critica per eliminare il bias "DataFrame"
+# --batch_size 128: Saturazione ottimale per GPU T4 con AMP (Automatic Mixed Precision)
+# --epochs 10: Finestra di convergenza standard
+# --force_train: Ignora eventuali residui e crea un nuovo file versionato
+print("\n--- [FASE 4] AVVIO ADDESTRAMENTO PESANTE ---")
+!python C2Orchestrator.py \
+    --subset 50000 \
+    --epochs 5 \
+    --batch_size 128 \
+    --force_train
+
+print("\n--- PIPELINE COMPLETATA CON SUCCESSO ---")
 
 ================================================================================
 
@@ -197,6 +255,142 @@ roadmap_operativa:
 
 ================================================================================
 
+--- FILE: evaluate.py | PATH: Project\evaluate.py ---
+-----------------------------------------------------
+
+import sys
+import os
+import torch
+import logging
+import pandas as pd
+from tqdm import tqdm
+from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
+from rouge_score import rouge_scorer
+from tokenizers import Tokenizer
+
+# --- [FASE 1] NORMALIZZAZIONE PERCORSI ---
+# Essendo lo script nella root, project_root è la cartella dello script stesso
+project_root = os.path.dirname(os.path.abspath(__file__))
+
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+# Import interni (ora che il path è iniettato correttamente)
+from models.factory import get_model_architecture
+from data.dataset import get_dataloader
+
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
+
+class BatchEvaluator:
+    def __init__(self, subset_size=200):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Mapping deterministico delle risorse
+        self.tokenizer_path = os.path.join(project_root, "tokenizer.json")
+        self.checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
+        self.data_path = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
+        
+        # Verifica esistenza risorse critiche
+        if not os.path.exists(self.tokenizer_path):
+            raise FileNotFoundError(f"❌ Tokenizer non trovato in: {self.tokenizer_path}")
+            
+        self.tokenizer = Tokenizer.from_file(self.tokenizer_path)
+        self.subset_size = subset_size
+        self.results = []
+
+    def get_all_checkpoints(self):
+        """Recupera tutti i file .pt nella cartella checkpoints"""
+        if not os.path.exists(self.checkpoint_dir):
+            return []
+        files = [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
+        return sorted(files)
+
+    def evaluate_single_checkpoint(self, checkpoint_name):
+        # Inferenza architettura: cerca 'transformer' nel nome, altrimenti LSTM
+        model_tag = "transformer" if "transformer" in checkpoint_name.lower() else "lstm_attention"
+        checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
+        
+        # 1. Caricamento Modello
+        try:
+            model = get_model_architecture(model_tag, self.device)
+            model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+            model.eval()
+        except Exception as e:
+            return {"file": checkpoint_name, "error": str(e)}
+        
+        # 2. Setup Dataloader (Test set)
+        test_loader = get_dataloader(
+            self.data_path, "test", 
+            self.tokenizer_path, batch_size=1, subset=self.subset_size
+        )
+
+        references = []
+        hypotheses = []
+        
+        with torch.no_grad():
+            for src, trg in test_loader:
+                src = src.to(self.device)
+                
+                # Decoding (Greedy)
+                encoder_outputs, hidden, cell = model.encoder(src)
+                input_token = torch.LongTensor([self.tokenizer.token_to_id("<SOS>")]).to(self.device)
+                
+                predicted_indices = []
+                for _ in range(30):
+                    output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+                    top1 = output.argmax(1)
+                    token_id = top1.item()
+                    if token_id == self.tokenizer.token_to_id("<EOS>"): break
+                    predicted_indices.append(token_id)
+                    input_token = top1
+
+                # Clean Decoding
+                pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).replace('Ġ', ' ').strip()
+                real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).replace('Ġ', ' ').strip()
+                
+                hypotheses.append(pred_text.split())
+                references.append([real_text.split()])
+
+        # --- CALCOLO METRICHE ---
+        bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
+        scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
+        rougeL = sum(scorer.score(" ".join(r[0]), " ".join(h))['rougeL'].fmeasure for h, r in zip(hypotheses, references)) / len(hypotheses)
+        
+        return {"file": checkpoint_name, "bleu": bleu, "rougeL": rougeL}
+
+    def run_all(self):
+        checkpoints = self.get_all_checkpoints()
+        if not checkpoints:
+            print(f"❌ Nessun checkpoint trovato in {self.checkpoint_dir}")
+            return
+
+        print(f"🚀 Avvio Batch Evaluation su {len(checkpoints)} modelli...")
+        for ckpt in checkpoints:
+            print(f"🧐 Analisi di: {ckpt}")
+            metrics = self.evaluate_single_checkpoint(ckpt)
+            if "error" in metrics:
+                print(f"   ⚠️ Errore: {metrics['error']}")
+            else:
+                self.results.append(metrics)
+        
+        self.show_summary()
+
+    def show_summary(self):
+        if not self.results: return
+        df = pd.DataFrame(self.results)
+        print("\n" + "="*70)
+        print("🏆 CLASSIFICA MODELLI (Sorted by BLEU)")
+        print("="*70)
+        print(df.sort_values(by="bleu", ascending=False).to_string(index=False))
+        print("="*70)
+
+if __name__ == "__main__":
+    evaluator = BatchEvaluator(subset_size=200)
+    evaluator.run_all()
+
+================================================================================
+
 --- FILE: requirements.txt | PATH: Project\requirements.txt ---
 ---------------------------------------------------------------
 
@@ -250,7 +444,6 @@ def is_adult(age):
         return
 
     model.eval()
-
     # 3. Trasformazione dell'Input (Symbolic Mapping)
     # Aggiungiamo manualmente i tag di inizio (1) e fine (2)
     encoded = tokenizer.encode(code_to_summarize).ids
@@ -306,10 +499,20 @@ import gzip
 import os
 import glob
 import random
+import sys
 from tokenizers import Tokenizer
+
+# --- [FASE 1] NORMALIZZAZIONE DETERMINISTICA ---
+# Essendo lo script nella Root, project_root è la cartella dello script stesso
+project_root = os.path.dirname(os.path.abspath(__file__))
+
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+# Ora l'import dei tuoi modelli funzionerà senza errori di modulo
 from models.factory import get_model_architecture
 
-# --- LOGICA DI GENERAZIONE (BEAM SEARCH CON TEMPERATURA) ---
+# --- LOGICA DI DECODIFICA AVANZATA ---
 def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, temp=1.2):
     device = src_tensor.device
     sos_id = tokenizer.token_to_id("<SOS>")
@@ -331,7 +534,7 @@ def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, t
             with torch.no_grad():
                 output, h_next, c_next = model.decoder(input_token, h, c, encoder_outputs)
             
-            # Applichiamo la temperatura per ammorbidire la distribuzione
+            # Distribuzione di probabilità con Temperatura: P = softmax(logits / T)
             probs = F.log_softmax(output / temp, dim=1)
             topk_probs, topk_ids = probs.topk(beam_width)
 
@@ -346,70 +549,91 @@ def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, t
 
     return beams[0][1]
 
+# --- DATA LOADING ---
 def load_random_samples(data_dir, split, num_samples=2):
-    """Carica campioni casuali dai file compressi del dataset."""
     search_pattern = os.path.join(data_dir, split, "*.jsonl.gz")
     files = glob.glob(search_pattern)
     if not files: return []
     
     samples = []
-    with gzip.open(random.choice(files), 'rt', encoding='utf-8') as f:
-        lines = f.readlines()
-        chosen = random.sample(lines, min(num_samples, len(lines)))
-        for c in chosen:
-            item = json.loads(c)
-            samples.append({
-                'code': item.get('code', item.get('func_code_string', '')),
-                'doc': item.get('docstring', item.get('func_documentation_string', ''))
-            })
+    try:
+        with gzip.open(random.choice(files), 'rt', encoding='utf-8') as f:
+            lines = f.readlines()
+            chosen = random.sample(lines, min(num_samples, len(lines)))
+            for c in chosen:
+                item = json.loads(c)
+                samples.append({
+                    'code': item.get('code', item.get('func_code_string', '')),
+                    'doc': item.get('docstring', item.get('func_documentation_string', ''))
+                })
+    except: pass
     return samples
 
+# --- CORE AUDIT ENGINE ---
 def run_deep_audit():
-    # --- CONFIG ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = Tokenizer.from_file("Project/tokenizer.json")
-    model = get_model_architecture("lstm_attention", device)
-    checkpoint = "Project/models/checkpoints/best_lstm_attention.pt"
     
-    if not os.path.exists(checkpoint):
-        print("[!] Errore: Nessun checkpoint trovato.")
+    # Mapping risorse basato sulla nuova Root
+    tokenizer_path = os.path.join(project_root, "tokenizer.json")
+    checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
+    data_root = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
+
+    if not os.path.exists(tokenizer_path):
+        print(f"❌ Tokenizer non trovato in: {tokenizer_path}")
         return
-    model.load_state_dict(torch.load(checkpoint, map_location=device))
-    model.eval()
 
-    # --- SORGENTI DATI ---
-    data_root = "Project/Datasets/python/final/jsonl"
+    tokenizer = Tokenizer.from_file(tokenizer_path)
     
-    # 1. Test di Memorizzazione (da Train)
-    train_samples = load_random_samples(data_root, "train", 2)
-    # 2. Test di Generalizzazione (da Test/Valid)
-    test_samples = load_random_samples(data_root, "test", 2)
-    # 3. Test di Iniezione (Codice mai visto, scritto da noi)
-    custom_samples = [
-        {"code": "def power(a, b): return a ** b", "doc": "Calculates power of a number."},
-        {"code": "def check_empty(l): return len(l) == 0", "doc": "Checks if list is empty."}
-    ]
+    # 1. Recupero Checkpoints
+    if not os.path.exists(checkpoint_dir):
+        print(f"❌ Directory checkpoints non trovata: {checkpoint_dir}")
+        return
+        
+    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
+    if not checkpoints:
+        print("❌ Nessun file .pt trovato.")
+        return
 
-    suites = {"TRAIN (Memorization)": train_samples, "TEST (Generalization)": test_samples, "CUSTOM (Injection)": custom_samples}
+    # 2. Preparazione Suite di Test
+    suites = {
+        "TRAIN (Memorization)": load_random_samples(data_root, "train", 2),
+        "TEST (Generalization)": load_random_samples(data_root, "test", 2),
+        "CUSTOM (Injection)": [
+            {"code": "def power(a, b): return a ** b", "doc": "Calculates power of a number."},
+            {"code": "def check_empty(l): return len(l) == 0", "doc": "Checks if list is empty."}
+        ]
+    }
 
-    print(f"\n{'='*80}\nSTARTING MODEL AUDIT: {device}\n{'='*80}")
+    print(f"\n{'='*80}\n🚀 STARTING BATCH AUDIT ON {len(checkpoints)} MODELS\n{'='*80}")
 
-    for suite_name, samples in suites.items():
-        print(f"\n>>> SUITE: {suite_name}")
-        for i, s in enumerate(samples):
-            # Preprocessing
-            encoded = tokenizer.encode(s['code']).ids
-            src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
-            
-            # Predizione
-            ids = beam_search_decode(model, src_tensor, tokenizer)
-            prediction = tokenizer.decode(ids, skip_special_tokens=True).replace('Ġ', ' ').strip()
-            
-            print(f"\n  SAMPLE #{i+1}")
-            print(f"  CODE: {s['code'].replace(chr(10), ' ')[:70]}...")
-            print(f"  REAL: {s['doc'][:70]}...")
-            print(f"  PRED: {prediction}")
-            print(f"  {'-'*40}")
+    for ckpt_name in sorted(checkpoints):
+        print(f"\n🔍 ANALYZING CHECKPOINT: {ckpt_name}")
+        
+        # Determina architettura (Transformer se specificato nel nome, altrimenti LSTM)
+        model_tag = "transformer" if "transformer" in ckpt_name.lower() else "lstm_attention"
+        
+        try:
+            model = get_model_architecture(model_tag, device)
+            ckpt_path = os.path.join(checkpoint_dir, ckpt_name)
+            model.load_state_dict(torch.load(ckpt_path, map_location=device))
+            model.eval()
+
+            for suite_name, samples in suites.items():
+                print(f"\n  >>> SUITE: {suite_name}")
+                for i, s in enumerate(samples):
+                    encoded = tokenizer.encode(s['code']).ids
+                    # SOS=1, EOS=2 (verifica se i tuoi ID corrispondono)
+                    src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
+                    
+                    ids = beam_search_decode(model, src_tensor, tokenizer)
+                    prediction = tokenizer.decode(ids, skip_special_tokens=True).replace('Ġ', ' ').strip()
+                    
+                    print(f"    SAMPLE #{i+1} | CODE: {s['code'].strip()[:50]}...")
+                    print(f"    REAL: {s['doc'][:60]}...")
+                    print(f"    PRED: {prediction}")
+                    print(f"    {'-'*20}")
+        except Exception as e:
+            print(f"    ❌ Errore durante l'audit di {ckpt_name}: {e}")
 
 if __name__ == "__main__":
     run_deep_audit()
@@ -455,117 +679,121 @@ import gzip
 import os
 import glob
 import re
+import hashlib
 from tokenizers import Tokenizer
 
-# DATA PREPROCESSING 
+# --- [FASE 1] DATA SANITIZATION (GIGO Principle) ---
 def clean_docstring(doc):
-    """
-    Removes noise from docstrings (GIGO Principle).
-    Takes only the first line and removes Sphinx/doctest tags.
-    """
+    """Rimuove rumore, tag Sphinx e residui di test dalle docstring."""
     if not doc: return ""
-
-    # 1. Take only the first part before an empty line or a period
+    # Estraiamo solo il primo paragrafo significativo
     first_line = doc.split('\n\n')[0].split('\n')[0]
-
-    # 2. Remove tags like :param:, :return:, @param etc.
+    # Pulizia tramite espressioni regolari
     clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
-
-    # 3. Remove any leftover doctest residues (>>>)
     clean = re.sub(r'>>>.*', '', clean)
-
     return clean.strip()
 
+def compute_content_hash(code, doc):
+    """Genera una 'impronta digitale' del contenuto per la deduplicazione."""
+    # Normalizziamo rimuovendo gli spazi bianchi per trovare duplicati sintattici
+    normalized = (re.sub(r'\s+', '', code) + doc).encode('utf-8')
+    return hashlib.sha256(normalized).hexdigest()
+
+# --- [FASE 2] SERIALIZABLE COLLATOR (Fix per Windows/Spawn) ---
+class SmartCollator:
+    """
+    Sostituisce la lambda function. Essendo una classe definita a livello 
+    di modulo, è 'Picklable' e non crasha su Windows con num_workers > 0.
+    """
+    def __init__(self, pad_id):
+        self.pad_id = pad_id
+
+    def __call__(self, batch):
+        code_seqs, doc_seqs = zip(*batch)
+        # Padding dinamico per ogni batch (efficienza computazionale)
+        code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=self.pad_id)
+        doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=self.pad_id)
+        return code_padded, doc_padded
+
+# --- [FASE 3] CORE DATASET ENGINE ---
 class CodeSummaryDataset(Dataset):
     def __init__(self, data_dir, split_type, tokenizer_path, max_len=128, subset=None):
-        """
-        data_dir: Should be the sandbox (Project/Datasets/python/final/jsonl)
-        """
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.max_len = max_len
         self.data = []
+        self.seen_hashes = set() # Barriera contro il Data Leakage
 
-        # 1. Selective search (No Junk Files)
-        # We look only in the specific split subfolder
         search_pattern = os.path.join(data_dir, split_type, "*.jsonl.gz")
         files = glob.glob(search_pattern)
         
         if not files:
-            raise FileNotFoundError(f"ERROR: No .jsonl.gz files found in {search_pattern}")
+            raise FileNotFoundError(f"❌ Nessun file trovato in {search_pattern}")
 
-        print(f"--- Loading {split_type} set: {len(files)} files detected ---")
+        print(f"🔍 Audit Dataset [{split_type}]: Scansione in corso...")
 
-        # 2. Loading and Sanitization
         for file_path in files:
             with gzip.open(file_path, 'rt', encoding='utf-8') as f:
                 for line in f:
-                    # Load JSON line
-                    item = json.loads(line)
-
-                    # Extract raw code and docstring
-                    raw_code = item.get('code', item.get('func_code_string', ''))
-                    raw_doc = item.get('docstring', item.get('func_documentation_string', ''))
-                    
-                    # Apply quality filter
-                    clean_doc = clean_docstring(raw_doc)
-                    
-                    # Inclusion criteria: only "sensible" pairs
-                    if len(clean_doc) > 10 and 10 < len(raw_code.split()) < 200:
-                        self.data.append({'code': raw_code, 'doc': clean_doc})
-                    
-                    if subset and len(self.data) >= subset:
-                        break
-            if subset and len(self.data) >= subset:
-                break
+                    try:
+                        item = json.loads(line)
+                        code = item.get('code', item.get('func_code_string', ''))
+                        doc = item.get('docstring', item.get('func_documentation_string', ''))
+                        
+                        clean_doc = clean_docstring(doc)
+                        
+                        # Filtri di Qualità e Unicità
+                        if len(clean_doc) > 10 and 10 < len(code.split()) < 200:
+                            f_hash = compute_content_hash(code, clean_doc)
+                            if f_hash not in self.seen_hashes:
+                                self.seen_hashes.add(f_hash)
+                                self.data.append({'code': code, 'doc': clean_doc})
+                        
+                        if subset and len(self.data) >= subset: break
+                    except: continue # Salta righe corrotte
+                if subset and len(self.data) >= subset: break
         
-        print(f"Examples loaded for {split_type}: {len(self.data)}")
+        print(f"✅ {split_type.upper()} pronto: {len(self.data)} campioni univoci.")
         
-        # Special Tokens
+        # Mapping ID Speciali
         self.pad_id = self.tokenizer.token_to_id("<PAD>")
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
         self.eos_id = self.tokenizer.token_to_id("<EOS>")
 
-    # LENGTH OF DATASET
     def __len__(self):
         return len(self.data)
 
-    # GET ITEM BY INDEX
     def __getitem__(self, idx):
         item = self.data[idx]
+        # Encoding con iniezione di SOS e EOS
+        c_tokens = self.tokenizer.encode(item['code']).ids
+        code_ids = [self.sos_id] + c_tokens[:self.max_len-2] + [self.eos_id]
         
-        # TRANSFORM: From clean text to numeric IDs
-        code_tokens = self.tokenizer.encode(item['code']).ids
-        code_ids = [self.sos_id] + code_tokens[:self.max_len-2] + [self.eos_id]
-        
-        doc_tokens = self.tokenizer.encode(item['doc']).ids
-        doc_ids = [self.sos_id] + doc_tokens[:self.max_len-2] + [self.eos_id]
+        d_tokens = self.tokenizer.encode(item['doc']).ids
+        doc_ids = [self.sos_id] + d_tokens[:self.max_len-2] + [self.eos_id]
         
         return torch.tensor(code_ids), torch.tensor(doc_ids)
 
-# COLLATE FUNCTION FOR DATALOADER
-def collate_fn(batch, pad_id=0):
-
-    # Unzip the batch
-    code_seqs, doc_seqs = zip(*batch)
-
-    # Pad sequences to the maximum length in the batch
-    code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=pad_id)
-    doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=pad_id)
-
-    return code_padded, doc_padded
-
-# DATA LOADER CREATION FUNCTION
+# --- [FASE 4] DATALOADER FACTORY ---
 def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
-
-    # Initialize the dataset
     dataset = CodeSummaryDataset(data_dir, split_type, tokenizer_path, subset=subset)
+    
+    # Inizializzazione del collatore serializzabile
+    collator = SmartCollator(dataset.pad_id)
+    
+    # Adaptive Worker Logic
+    # Su Windows usiamo 0 workers se il dataset è piccolo per evitare overhead, 
+    # o comunque evitiamo i crash di spawn.
+    is_windows = os.name == 'nt'
+    workers = 0 if (is_windows or (subset and subset < 100)) else 2
 
-    # Return the DataLoader
     return DataLoader(
         dataset, 
         batch_size=batch_size, 
         shuffle=shuffle, 
-        collate_fn=lambda b: collate_fn(b, dataset.pad_id)
+        collate_fn=collator,
+        num_workers=workers,
+        pin_memory=True if torch.cuda.is_available() else False,
+        prefetch_factor=2 if workers > 0 else None
     )
 
 ================================================================================
@@ -778,7 +1006,7 @@ def prepare_vocab(jsonl_base_dir, tokenizer_path):
 ----------------------------------------------------------------------------------------------
 
 === DATASET PREVIEW - CODE SEARCH NET (PYTHON) ===
-Source File: Project/Datasets\python\final\jsonl\train\python_train_0.jsonl.gz
+Source File: c:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project\Datasets\python\final\jsonl\train\python_train_0.jsonl.gz
 
 --- SAMPLE #1 ---
 DOCSTRING: Trains a k-nearest neighbors classifier for face recognition.
@@ -4797,44 +5025,31 @@ logger = logging.getLogger(__name__)
 
 def get_model_architecture(model_type, device, vocab_size=10000, config=None):
     """
-    Architecture Factory: Gestisce la creazione dinamica dei modelli.
-    I modelli non ancora implementati sollevano NotImplementedError per 
-    permettere il salto automatico nel C2Orchestrator.
+    Architecture Factory: Applica il principio di parsimonia.
     """
-    
-    # Configurazione Standard (Hardware Abstraction Layer)
-    ENC_EMB_DIM = 256
-    DEC_EMB_DIM = 256
-    HID_DIM = 512
+    # Iperparametri calibrati per prevenire l'overfitting su subset medi (50k-100k)
+    ENC_EMB_DIM = 128   # Ridotto da 256
+    DEC_EMB_DIM = 128   # Ridotto da 256
+    HID_DIM = 256       # Ridotto da 512 per forzare la compressione
     N_LAYERS = 2
-    ENC_DROPOUT = 0.5
+    ENC_DROPOUT = 0.5   # Dropout aggressivo per disturbare la memorizzazione
     DEC_DROPOUT = 0.5
 
     if model_type == "lstm_attention":
-        logger.info("Factory: Assemblaggio LSTM con Attention (Bahdanau).")
+        logger.info(f"Factory: Generazione LSTM-ATTN (Bottleneck: {HID_DIM} units)")
         
-        # Iniezione delle Dipendenze (DI)
         attn = Attention(HID_DIM)
         enc = Encoder(vocab_size, ENC_EMB_DIM, HID_DIM, N_LAYERS, ENC_DROPOUT)
         dec = Decoder(vocab_size, DEC_EMB_DIM, HID_DIM, N_LAYERS, DEC_DROPOUT, attn)
         
         return Seq2Seq(enc, dec, device).to(device)
 
-    elif model_type == "lstm_simple":
-        # Placeholder per la Baseline senza meccanismo di attenzione
-        logger.info("Factory: Richiesta Baseline LSTM Simple rilevata.")
-        # In futuro: dec = DecoderSimple(vocab_size, ...)
-        raise NotImplementedError("Architettura 'lstm_simple' non ancora integrata nel catalogo.")
-
     elif model_type == "transformer":
-        # Placeholder per l'architettura SOTA (State-Of-The-Art)
-        logger.info("Factory: Richiesta Transformer Challenger rilevata.")
-        # In futuro: model = TransformerCustom(vocab_size, ...)
-        raise NotImplementedError("Architettura 'transformer' attualmente in fase di R&D.")
+        # Placeholder per evoluzione futura
+        raise NotImplementedError("Architettura Transformer in fase di progettazione.")
 
     else:
-        logger.error(f"Factory Error: Il tag '{model_type}' non corrisponde a nessuna specifica nota.")
-        raise ValueError(f"Modello '{model_type}' non presente nel catalogo della Factory.")
+        raise ValueError(f"Tag '{model_type}' non riconosciuto.")
 
 ================================================================================
 
@@ -4920,107 +5135,6 @@ Questa cartella conterrà gli script eseguibili per lanciare le operazioni princ
 
 ================================================================================
 
---- FILE: evaluate.py | PATH: Project\scripts\evaluate.py ---
--------------------------------------------------------------
-
-import sys
-import os
-
-# --- FIX PERCORSI (PRINCIPLE OF RELATIVE CONTEXT) ---
-# Aggiunge la cartella genitore (Project) al sys.path affinché Python trovi 'models' e 'data'
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, ".."))
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
-import torch
-import logging
-from tqdm import tqdm
-from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
-from rouge_score import rouge_scorer
-from tokenizers import Tokenizer
-
-# Ora gli import funzioneranno correttamente
-from models.factory import get_model_architecture
-from data.dataset import get_dataloader
-
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger(__name__)
-
-class ModelEvaluator:
-    def __init__(self, model_tag="lstm_attention", subset_size=200):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.tokenizer_path = os.path.join(project_root, "tokenizer.json")
-        self.checkpoint_path = os.path.join(project_root, "models", "checkpoints", f"best_{model_tag}.pt")
-        self.data_path = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
-        
-        self.tokenizer = Tokenizer.from_file(self.tokenizer_path)
-        self.subset_size = subset_size
-        
-        # Caricamento Modello
-        self.model = get_model_architecture(model_tag, self.device)
-        if os.path.exists(self.checkpoint_path):
-            self.model.load_state_dict(torch.load(self.checkpoint_path, map_location=self.device))
-            print(f"[+] Pesi caricati da: {self.checkpoint_path}")
-        else:
-            print(f"[!] Checkpoint non trovato in {self.checkpoint_path}")
-            
-        self.model.eval()
-        
-        self.test_loader = get_dataloader(
-            self.data_path, "test", 
-            self.tokenizer_path, batch_size=1, subset=subset_size
-        )
-
-    def run_evaluation(self):
-        references = []
-        hypotheses = []
-        
-        print(f"[*] Avvio Valutazione Quantitativa su {self.subset_size} campioni...")
-        
-        with torch.no_grad():
-            for src, trg in tqdm(self.test_loader):
-                src = src.to(self.device)
-                
-                # Generazione Greedy
-                encoder_outputs, hidden, cell = self.model.encoder(src)
-                input_token = torch.LongTensor([self.tokenizer.token_to_id("<SOS>")]).to(self.device)
-                
-                predicted_indices = []
-                for _ in range(30):
-                    output, hidden, cell = self.model.decoder(input_token, hidden, cell, encoder_outputs)
-                    top1 = output.argmax(1)
-                    token_id = top1.item()
-                    if token_id == self.tokenizer.token_to_id("<EOS>"): break
-                    predicted_indices.append(token_id)
-                    input_token = top1
-
-                # Decodifica e pulizia (Byte-Level BPE fix)
-                pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).replace('Ġ', ' ').strip()
-                real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).replace('Ġ', ' ').strip()
-                
-                hypotheses.append(pred_text.split())
-                references.append([real_text.split()])
-
-        # --- CALCOLO METRICHE ---
-        bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
-        scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
-        rouge1 = sum(scorer.score(" ".join(r[0]), " ".join(h))['rouge1'].fmeasure for h, r in zip(hypotheses, references)) / len(hypotheses)
-        
-        self.print_report(bleu, rouge1, hypotheses)
-
-    def print_report(self, bleu, rouge, hypotheses):
-        # ... (stessa logica del report precedente)
-        print("\n" + "="*50)
-        print(f"BLEU: {bleu:.4f} | ROUGE: {rouge:.4f}")
-        print("="*50)
-
-if __name__ == "__main__":
-    evaluator = ModelEvaluator()
-    evaluator.run_evaluation()
-
-================================================================================
-
 --- FILE: train.py | PATH: Project\scripts\train.py ---
 -------------------------------------------------------
 
@@ -5033,30 +5147,19 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 def train_model(model, train_loader, valid_loader, config, device):
-    # --- FASE 0: AUDIT HARDWARE & MODELLO (PRINCIPLE OF OBSERVABILITY) ---
-    logger.info("="*50)
-    logger.info("AUDIT ESECUZIONE TRAINING")
-    logger.info(f"Target Device: {device.type.upper()}")
-    
-    if device.type == 'cuda':
-        logger.info(f"GPU Model: {torch.cuda.get_device_name(0)}")
-        logger.info(f"VRAM Totale: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
-        logger.info("Mixed Precision: ABILITATA (torch.amp.autocast)")
-    else:
-        logger.warning("ATTENZIONE: Esecuzione su CPU. Il processo sarà lento.")
-        logger.info("Mixed Precision: DISABILITATA (Non supportata su CPU standard)")
-
+    # --- FASE 0: AUDIT HARDWARE & MODELLO ---
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Parametri Addestrabili: {total_params:,}")
-    logger.info("="*50)
+    logger.info(f"🚀 TRAINING START | Params: {total_params:,} | Device: {device}")
 
-    # Inizializzazione standard
+    # Inizializzazione con L2 Regularization (Weight Decay)
+    # Il weight_decay forza i pesi piccoli, rendendo difficile la memorizzazione esatta.
     criterion = nn.CrossEntropyLoss(ignore_index=0)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-5)
     
-    # Scaler per AMP
+    # Scheduler: Riduce la LR se la Val Loss smette di scendere (Punto di sella)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1)
+    
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
-
     best_valid_loss = float('inf')
 
     for epoch in range(config.epochs):
@@ -5068,9 +5171,10 @@ def train_model(model, train_loader, valid_loader, config, device):
             src, trg = src.to(device, non_blocking=True), trg.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
 
-            # Esecuzione con Autocast (Automatic Mixed Precision)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                output = model(src, trg)
+                # Ridurre gradualmente il teacher forcing durante le epoche
+                tf_ratio = max(0.2, 0.5 - (epoch * 0.1)) 
+                output = model(src, trg, teacher_forcing_ratio=tf_ratio)
                 output_dim = output.shape[-1]
                 loss = criterion(output[:, 1:].reshape(-1, output_dim), trg[:, 1:].reshape(-1))
 
@@ -5086,15 +5190,16 @@ def train_model(model, train_loader, valid_loader, config, device):
                 optimizer.step()
 
             train_loss += loss.item()
-            pbar.set_postfix(loss=f"{loss.item():.4f}", gpu_mem=f"{torch.cuda.memory_allocated(0)/1e9:.1f}GB" if device.type == 'cuda' else "N/A")
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
-        # Validazione
+        # Validazione e Scheduling
         valid_loss = evaluate_validation(model, valid_loader, criterion, device)
+        scheduler.step(valid_loss) # Adattamento dinamico della LR
         
-        status_msg = f"Epoch {epoch+1} FINISHED | Train Loss: {train_loss/len(train_loader):.4f} | Val Loss: {valid_loss:.4f}"
+        status_msg = f"Epoch {epoch+1} | Train Loss: {train_loss/len(train_loader):.4f} | Val Loss: {valid_loss:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}"
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
-            status_msg += " [NEW BEST]"
+            status_msg += " 🔥 [NEW BEST]"
         
         logger.info(status_msg)
 
@@ -5103,9 +5208,9 @@ def evaluate_validation(model, loader, criterion, device):
     epoch_loss = 0
     with torch.no_grad():
         for src, trg in loader:
-            src, trg = src.to(device, non_blocking=True), trg.to(device, non_blocking=True)
+            src, trg = src.to(device), trg.to(device)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                output = model(src, trg, teacher_forcing_ratio=0)
+                output = model(src, trg, teacher_forcing_ratio=0) # Zero TF in validazione
                 output_dim = output.shape[-1]
                 loss = criterion(output[:, 1:].reshape(-1, output_dim), trg[:, 1:].reshape(-1))
                 epoch_loss += loss.item()

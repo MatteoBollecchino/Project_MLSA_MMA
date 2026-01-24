@@ -3,8 +3,11 @@ Project Tree for: c:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project
 
 Project/
 ├───C2Orchestrator.py
+├───colab_remote_exec.txt
 ├───configs.txt
 ├───requirements.txt
+├───test.py
+├───test_audit.py
 ├───tokenizer.json
 ├───data/
     ├───README.md
@@ -42,8 +45,13 @@ Project/
     ├───attention.py
     ├───decoder.py
     ├───encoder.py
+    ├───factory.py
     ├───seq2seq.py
+    ├───checkpoints/
+        ├───best_lstm_attentionTot.pt
 ├───scripts/
     ├───README.md
+    ├───evaluate.py
+    ├───train.py
 ├───src/
     ├───README.md
