@@ -7,14 +7,14 @@ from models.seq2seq import Seq2Seq
 
 logger = logging.getLogger(__name__)
 
-def get_model_architecture(model_type, device, vocab_size=10000, config=None):
+def get_model_architecture(model_type, device, vocab_size=20000, config=None):
     """
     Architecture Factory: Applica il principio di parsimonia.
     """
     # Iperparametri calibrati per prevenire l'overfitting su subset medi (50k-100k)
-    ENC_EMB_DIM = 128   # Ridotto da 256
-    DEC_EMB_DIM = 128   # Ridotto da 256
-    HID_DIM = 256       # Ridotto da 512 per forzare la compressione
+    ENC_EMB_DIM = 256
+    DEC_EMB_DIM = 256   
+    HID_DIM = 512       
     N_LAYERS = 2
     ENC_DROPOUT = 0.5   # Dropout aggressivo per disturbare la memorizzazione
     DEC_DROPOUT = 0.5
