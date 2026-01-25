@@ -9,13 +9,10 @@ from rouge_score import rouge_scorer
 from tokenizers import Tokenizer
 
 # --- [FASE 1] NORMALIZZAZIONE PERCORSI ---
-# Essendo lo script nella root, project_root è la cartella dello script stesso
 project_root = os.path.dirname(os.path.abspath(__file__))
-
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# Import interni (ora che il path è iniettato correttamente)
 from models.factory import get_model_architecture
 from data.dataset import get_dataloader
 
@@ -26,40 +23,40 @@ class BatchEvaluator:
     def __init__(self, subset_size=200):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Mapping deterministico delle risorse
         self.tokenizer_path = os.path.join(project_root, "tokenizer.json")
         self.checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
         self.data_path = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
         
-        # Verifica esistenza risorse critiche
         if not os.path.exists(self.tokenizer_path):
             raise FileNotFoundError(f"❌ Tokenizer non trovato in: {self.tokenizer_path}")
             
         self.tokenizer = Tokenizer.from_file(self.tokenizer_path)
+        
+        # --- [CRITICO] ESTRAZIONE VOCAB_SIZE DINAMICA ---
+        self.vocab_size = self.tokenizer.get_vocab_size()
+        logger.info(f"Detezione Vocabolario: {self.vocab_size} token.")
+        
         self.subset_size = subset_size
         self.results = []
 
     def get_all_checkpoints(self):
-        """Recupera tutti i file .pt nella cartella checkpoints"""
         if not os.path.exists(self.checkpoint_dir):
             return []
-        files = [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
-        return sorted(files)
+        return sorted([f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")])
 
     def evaluate_single_checkpoint(self, checkpoint_name):
-        # Inferenza architettura: cerca 'transformer' nel nome, altrimenti LSTM
         model_tag = "transformer" if "transformer" in checkpoint_name.lower() else "lstm_attention"
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
         
-        # 1. Caricamento Modello
+        # 1. Caricamento Modello con Vocab_Size CORRETTO
         try:
-            model = get_model_architecture(model_tag, self.device)
+            model = get_model_architecture(model_tag, self.device, vocab_size=self.vocab_size)
             model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
             model.eval()
         except Exception as e:
-            return {"file": checkpoint_name, "error": str(e)}
+            return {"file": checkpoint_name, "error": f"Size Mismatch o Corruzione: {str(e)}"}
         
-        # 2. Setup Dataloader (Test set)
+        # 2. Setup Dataloader
         test_loader = get_dataloader(
             self.data_path, "test", 
             self.tokenizer_path, batch_size=1, subset=self.subset_size
@@ -68,26 +65,40 @@ class BatchEvaluator:
         references = []
         hypotheses = []
         
+        sos_id = self.tokenizer.token_to_id("<SOS>")
+        eos_id = self.tokenizer.token_to_id("<EOS>")
+
         with torch.no_grad():
-            for src, trg in test_loader:
+            for src, trg in tqdm(test_loader, desc=f"Valutazione {model_tag}", leave=False):
                 src = src.to(self.device)
-                
-                # Decoding (Greedy)
-                encoder_outputs, hidden, cell = model.encoder(src)
-                input_token = torch.LongTensor([self.tokenizer.token_to_id("<SOS>")]).to(self.device)
-                
                 predicted_indices = []
-                for _ in range(30):
-                    output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
-                    top1 = output.argmax(1)
-                    token_id = top1.item()
-                    if token_id == self.tokenizer.token_to_id("<EOS>"): break
-                    predicted_indices.append(token_id)
-                    input_token = top1
+
+                if model_tag == "lstm_attention":
+                    # --- LOGICA DECODING LSTM ---
+                    encoder_outputs, hidden, cell = model.encoder(src)
+                    input_token = torch.LongTensor([sos_id]).to(self.device)
+                    
+                    for _ in range(30):
+                        output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+                        top1 = output.argmax(1)
+                        if top1.item() == eos_id: break
+                        predicted_indices.append(top1.item())
+                        input_token = top1
+                
+                else:
+                    # --- LOGICA DECODING TRANSFORMER (Autoregressiva) ---
+                    # Il Transformer ha bisogno di generare un token alla volta ricostruendo il target
+                    ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(self.device)
+                    for _ in range(30):
+                        out = model(src, ys) # Forward pass
+                        next_word = out[:, -1].argmax(1).item()
+                        if next_word == eos_id: break
+                        predicted_indices.append(next_word)
+                        ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(self.device)], dim=1)
 
                 # Clean Decoding
-                pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).replace('Ġ', ' ').strip()
-                real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).replace('Ġ', ' ').strip()
+                pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
+                real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
                 
                 hypotheses.append(pred_text.split())
                 references.append([real_text.split()])
@@ -122,6 +133,9 @@ class BatchEvaluator:
         print("\n" + "="*70)
         print("🏆 CLASSIFICA MODELLI (Sorted by BLEU)")
         print("="*70)
+        # Formattazione per rendere i numeri leggibili
+        df['bleu'] = df['bleu'].apply(lambda x: f"{x:.4f}")
+        df['rougeL'] = df['rougeL'].apply(lambda x: f"{x:.4f}")
         print(df.sort_values(by="bleu", ascending=False).to_string(index=False))
         print("="*70)
 

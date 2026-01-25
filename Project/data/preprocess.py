@@ -29,7 +29,7 @@ def clean_docstring(doc):
     return clean.strip()
 
 # TOKENIZER TRAINING
-def train_bpe_tokenizer(files, save_path, vocab_size=10000):
+def train_bpe_tokenizer(files, save_path, vocab_size=20000):
 
     # Initialize a Byte-Level BPE tokenizer
     tokenizer = Tokenizer(models.BPE(unk_token="<UNK>"))

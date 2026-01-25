@@ -9,13 +9,10 @@ import sys
 from tokenizers import Tokenizer
 
 # --- [FASE 1] NORMALIZZAZIONE DETERMINISTICA ---
-# Essendo lo script nella Root, project_root è la cartella dello script stesso
 project_root = os.path.dirname(os.path.abspath(__file__))
-
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# Ora l'import dei tuoi modelli funzionerà senza errori di modulo
 from models.factory import get_model_architecture
 
 # --- LOGICA DI DECODIFICA AVANZATA ---
@@ -24,6 +21,8 @@ def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, t
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
 
+    # Nota: Questa logica assume un'architettura LSTM/RNN. 
+    # Per il Transformer la logica di beam search differisce (niente hidden/cell).
     with torch.no_grad():
         encoder_outputs, hidden, cell = model.encoder(src_tensor)
 
@@ -40,7 +39,6 @@ def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, t
             with torch.no_grad():
                 output, h_next, c_next = model.decoder(input_token, h, c, encoder_outputs)
             
-            # Distribuzione di probabilità con Temperatura: P = softmax(logits / T)
             probs = F.log_softmax(output / temp, dim=1)
             topk_probs, topk_ids = probs.topk(beam_width)
 
@@ -79,7 +77,6 @@ def load_random_samples(data_dir, split, num_samples=2):
 def run_deep_audit():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Mapping risorse basato sulla nuova Root
     tokenizer_path = os.path.join(project_root, "tokenizer.json")
     checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
     data_root = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
@@ -88,9 +85,11 @@ def run_deep_audit():
         print(f"❌ Tokenizer non trovato in: {tokenizer_path}")
         return
 
+    # --- [FASE 2] ESTRAZIONE DINAMICA VOCAB ---
     tokenizer = Tokenizer.from_file(tokenizer_path)
+    current_vocab_size = tokenizer.get_vocab_size()
+    print(f"💡 Vocabolario rilevato: {current_vocab_size} token")
     
-    # 1. Recupero Checkpoints
     if not os.path.exists(checkpoint_dir):
         print(f"❌ Directory checkpoints non trovata: {checkpoint_dir}")
         return
@@ -100,7 +99,6 @@ def run_deep_audit():
         print("❌ Nessun file .pt trovato.")
         return
 
-    # 2. Preparazione Suite di Test
     suites = {
         "TRAIN (Memorization)": load_random_samples(data_root, "train", 2),
         "TEST (Generalization)": load_random_samples(data_root, "test", 2),
@@ -110,36 +108,44 @@ def run_deep_audit():
         ]
     }
 
-    print(f"\n{'='*80}\n🚀 STARTING BATCH AUDIT ON {len(checkpoints)} MODELS\n{'='*80}")
+    print(f"\n{'='*80}\n🚀 STARTING BATCH AUDIT | DEVICE: {device}\n{'='*80}")
 
     for ckpt_name in sorted(checkpoints):
         print(f"\n🔍 ANALYZING CHECKPOINT: {ckpt_name}")
-        
-        # Determina architettura (Transformer se specificato nel nome, altrimenti LSTM)
         model_tag = "transformer" if "transformer" in ckpt_name.lower() else "lstm_attention"
         
         try:
-            model = get_model_architecture(model_tag, device)
+            # Passiamo esplicitamente vocab_size per evitare mismatch
+            model = get_model_architecture(model_tag, device, vocab_size=current_vocab_size)
             ckpt_path = os.path.join(checkpoint_dir, ckpt_name)
-            model.load_state_dict(torch.load(ckpt_path, map_location=device))
+            
+            # Caricamento pesi
+            state_dict = torch.load(ckpt_path, map_location=device)
+            model.load_state_dict(state_dict)
             model.eval()
 
             for suite_name, samples in suites.items():
-                print(f"\n  >>> SUITE: {suite_name}")
+                print(f"\n   >>> SUITE: {suite_name}")
                 for i, s in enumerate(samples):
                     encoded = tokenizer.encode(s['code']).ids
-                    # SOS=1, EOS=2 (verifica se i tuoi ID corrispondono)
+                    # Nota: Assicurati che 1 e 2 siano SOS e EOS nel tuo tokenizer
                     src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
                     
-                    ids = beam_search_decode(model, src_tensor, tokenizer)
-                    prediction = tokenizer.decode(ids, skip_special_tokens=True).replace('Ġ', ' ').strip()
+                    # Decoding con Beam Search (solo per LSTM)
+                    if model_tag == "lstm_attention":
+                        ids = beam_search_decode(model, src_tensor, tokenizer)
+                    else:
+                        # Logica di decoding base per Transformer (da implementare se necessario)
+                        ids = [1] # Placeholder
+                        
+                    prediction = tokenizer.decode(ids, skip_special_tokens=True).strip()
                     
-                    print(f"    SAMPLE #{i+1} | CODE: {s['code'].strip()[:50]}...")
-                    print(f"    REAL: {s['doc'][:60]}...")
+                    print(f"    SAMPLE #{i+1} | CODE: {s['code'].strip()[:50].replace('\\n', ' ')}...")
+                    print(f"    REAL: {s['doc'][:60].strip()}...")
                     print(f"    PRED: {prediction}")
                     print(f"    {'-'*20}")
         except Exception as e:
-            print(f"    ❌ Errore durante l'audit di {ckpt_name}: {e}")
+            print(f"    ❌ Critical Error su {ckpt_name}: {e}")
 
 if __name__ == "__main__":
     run_deep_audit()

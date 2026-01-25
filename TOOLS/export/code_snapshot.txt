@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-24 15:12:57
+Generated on: 2026-01-25 12:22:14
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -62,7 +62,7 @@ class CodeSummarizationPipeline:
             return
 
         # FASE 3: TRAINING
-        experiment_queue = ["lstm_attention"]
+        experiment_queue = ["transformer"]
         
         # Inizializzazione loader con i percorsi dinamici
         train_loader = get_dataloader(self.jsonl_base, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
@@ -269,13 +269,10 @@ from rouge_score import rouge_scorer
 from tokenizers import Tokenizer
 
 # --- [FASE 1] NORMALIZZAZIONE PERCORSI ---
-# Essendo lo script nella root, project_root è la cartella dello script stesso
 project_root = os.path.dirname(os.path.abspath(__file__))
-
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# Import interni (ora che il path è iniettato correttamente)
 from models.factory import get_model_architecture
 from data.dataset import get_dataloader
 
@@ -286,40 +283,40 @@ class BatchEvaluator:
     def __init__(self, subset_size=200):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Mapping deterministico delle risorse
         self.tokenizer_path = os.path.join(project_root, "tokenizer.json")
         self.checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
         self.data_path = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
         
-        # Verifica esistenza risorse critiche
         if not os.path.exists(self.tokenizer_path):
             raise FileNotFoundError(f"❌ Tokenizer non trovato in: {self.tokenizer_path}")
             
         self.tokenizer = Tokenizer.from_file(self.tokenizer_path)
+        
+        # --- [CRITICO] ESTRAZIONE VOCAB_SIZE DINAMICA ---
+        self.vocab_size = self.tokenizer.get_vocab_size()
+        logger.info(f"Detezione Vocabolario: {self.vocab_size} token.")
+        
         self.subset_size = subset_size
         self.results = []
 
     def get_all_checkpoints(self):
-        """Recupera tutti i file .pt nella cartella checkpoints"""
         if not os.path.exists(self.checkpoint_dir):
             return []
-        files = [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
-        return sorted(files)
+        return sorted([f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")])
 
     def evaluate_single_checkpoint(self, checkpoint_name):
-        # Inferenza architettura: cerca 'transformer' nel nome, altrimenti LSTM
         model_tag = "transformer" if "transformer" in checkpoint_name.lower() else "lstm_attention"
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
         
-        # 1. Caricamento Modello
+        # 1. Caricamento Modello con Vocab_Size CORRETTO
         try:
-            model = get_model_architecture(model_tag, self.device)
+            model = get_model_architecture(model_tag, self.device, vocab_size=self.vocab_size)
             model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
             model.eval()
         except Exception as e:
-            return {"file": checkpoint_name, "error": str(e)}
+            return {"file": checkpoint_name, "error": f"Size Mismatch o Corruzione: {str(e)}"}
         
-        # 2. Setup Dataloader (Test set)
+        # 2. Setup Dataloader
         test_loader = get_dataloader(
             self.data_path, "test", 
             self.tokenizer_path, batch_size=1, subset=self.subset_size
@@ -328,26 +325,40 @@ class BatchEvaluator:
         references = []
         hypotheses = []
         
+        sos_id = self.tokenizer.token_to_id("<SOS>")
+        eos_id = self.tokenizer.token_to_id("<EOS>")
+
         with torch.no_grad():
-            for src, trg in test_loader:
+            for src, trg in tqdm(test_loader, desc=f"Valutazione {model_tag}", leave=False):
                 src = src.to(self.device)
-                
-                # Decoding (Greedy)
-                encoder_outputs, hidden, cell = model.encoder(src)
-                input_token = torch.LongTensor([self.tokenizer.token_to_id("<SOS>")]).to(self.device)
-                
                 predicted_indices = []
-                for _ in range(30):
-                    output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
-                    top1 = output.argmax(1)
-                    token_id = top1.item()
-                    if token_id == self.tokenizer.token_to_id("<EOS>"): break
-                    predicted_indices.append(token_id)
-                    input_token = top1
+
+                if model_tag == "lstm_attention":
+                    # --- LOGICA DECODING LSTM ---
+                    encoder_outputs, hidden, cell = model.encoder(src)
+                    input_token = torch.LongTensor([sos_id]).to(self.device)
+                    
+                    for _ in range(30):
+                        output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+                        top1 = output.argmax(1)
+                        if top1.item() == eos_id: break
+                        predicted_indices.append(top1.item())
+                        input_token = top1
+                
+                else:
+                    # --- LOGICA DECODING TRANSFORMER (Autoregressiva) ---
+                    # Il Transformer ha bisogno di generare un token alla volta ricostruendo il target
+                    ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(self.device)
+                    for _ in range(30):
+                        out = model(src, ys) # Forward pass
+                        next_word = out[:, -1].argmax(1).item()
+                        if next_word == eos_id: break
+                        predicted_indices.append(next_word)
+                        ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(self.device)], dim=1)
 
                 # Clean Decoding
-                pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).replace('Ġ', ' ').strip()
-                real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).replace('Ġ', ' ').strip()
+                pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
+                real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
                 
                 hypotheses.append(pred_text.split())
                 references.append([real_text.split()])
@@ -382,6 +393,9 @@ class BatchEvaluator:
         print("\n" + "="*70)
         print("🏆 CLASSIFICA MODELLI (Sorted by BLEU)")
         print("="*70)
+        # Formattazione per rendere i numeri leggibili
+        df['bleu'] = df['bleu'].apply(lambda x: f"{x:.4f}")
+        df['rougeL'] = df['rougeL'].apply(lambda x: f"{x:.4f}")
         print(df.sort_values(by="bleu", ascending=False).to_string(index=False))
         print("="*70)
 
@@ -503,13 +517,10 @@ import sys
 from tokenizers import Tokenizer
 
 # --- [FASE 1] NORMALIZZAZIONE DETERMINISTICA ---
-# Essendo lo script nella Root, project_root è la cartella dello script stesso
 project_root = os.path.dirname(os.path.abspath(__file__))
-
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# Ora l'import dei tuoi modelli funzionerà senza errori di modulo
 from models.factory import get_model_architecture
 
 # --- LOGICA DI DECODIFICA AVANZATA ---
@@ -518,6 +529,8 @@ def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, t
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
 
+    # Nota: Questa logica assume un'architettura LSTM/RNN. 
+    # Per il Transformer la logica di beam search differisce (niente hidden/cell).
     with torch.no_grad():
         encoder_outputs, hidden, cell = model.encoder(src_tensor)
 
@@ -534,7 +547,6 @@ def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, t
             with torch.no_grad():
                 output, h_next, c_next = model.decoder(input_token, h, c, encoder_outputs)
             
-            # Distribuzione di probabilità con Temperatura: P = softmax(logits / T)
             probs = F.log_softmax(output / temp, dim=1)
             topk_probs, topk_ids = probs.topk(beam_width)
 
@@ -573,7 +585,6 @@ def load_random_samples(data_dir, split, num_samples=2):
 def run_deep_audit():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Mapping risorse basato sulla nuova Root
     tokenizer_path = os.path.join(project_root, "tokenizer.json")
     checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
     data_root = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
@@ -582,9 +593,11 @@ def run_deep_audit():
         print(f"❌ Tokenizer non trovato in: {tokenizer_path}")
         return
 
+    # --- [FASE 2] ESTRAZIONE DINAMICA VOCAB ---
     tokenizer = Tokenizer.from_file(tokenizer_path)
+    current_vocab_size = tokenizer.get_vocab_size()
+    print(f"💡 Vocabolario rilevato: {current_vocab_size} token")
     
-    # 1. Recupero Checkpoints
     if not os.path.exists(checkpoint_dir):
         print(f"❌ Directory checkpoints non trovata: {checkpoint_dir}")
         return
@@ -594,7 +607,6 @@ def run_deep_audit():
         print("❌ Nessun file .pt trovato.")
         return
 
-    # 2. Preparazione Suite di Test
     suites = {
         "TRAIN (Memorization)": load_random_samples(data_root, "train", 2),
         "TEST (Generalization)": load_random_samples(data_root, "test", 2),
@@ -604,36 +616,44 @@ def run_deep_audit():
         ]
     }
 
-    print(f"\n{'='*80}\n🚀 STARTING BATCH AUDIT ON {len(checkpoints)} MODELS\n{'='*80}")
+    print(f"\n{'='*80}\n🚀 STARTING BATCH AUDIT | DEVICE: {device}\n{'='*80}")
 
     for ckpt_name in sorted(checkpoints):
         print(f"\n🔍 ANALYZING CHECKPOINT: {ckpt_name}")
-        
-        # Determina architettura (Transformer se specificato nel nome, altrimenti LSTM)
         model_tag = "transformer" if "transformer" in ckpt_name.lower() else "lstm_attention"
         
         try:
-            model = get_model_architecture(model_tag, device)
+            # Passiamo esplicitamente vocab_size per evitare mismatch
+            model = get_model_architecture(model_tag, device, vocab_size=current_vocab_size)
             ckpt_path = os.path.join(checkpoint_dir, ckpt_name)
-            model.load_state_dict(torch.load(ckpt_path, map_location=device))
+            
+            # Caricamento pesi
+            state_dict = torch.load(ckpt_path, map_location=device)
+            model.load_state_dict(state_dict)
             model.eval()
 
             for suite_name, samples in suites.items():
-                print(f"\n  >>> SUITE: {suite_name}")
+                print(f"\n   >>> SUITE: {suite_name}")
                 for i, s in enumerate(samples):
                     encoded = tokenizer.encode(s['code']).ids
-                    # SOS=1, EOS=2 (verifica se i tuoi ID corrispondono)
+                    # Nota: Assicurati che 1 e 2 siano SOS e EOS nel tuo tokenizer
                     src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
                     
-                    ids = beam_search_decode(model, src_tensor, tokenizer)
-                    prediction = tokenizer.decode(ids, skip_special_tokens=True).replace('Ġ', ' ').strip()
+                    # Decoding con Beam Search (solo per LSTM)
+                    if model_tag == "lstm_attention":
+                        ids = beam_search_decode(model, src_tensor, tokenizer)
+                    else:
+                        # Logica di decoding base per Transformer (da implementare se necessario)
+                        ids = [1] # Placeholder
+                        
+                    prediction = tokenizer.decode(ids, skip_special_tokens=True).strip()
                     
-                    print(f"    SAMPLE #{i+1} | CODE: {s['code'].strip()[:50]}...")
-                    print(f"    REAL: {s['doc'][:60]}...")
+                    print(f"    SAMPLE #{i+1} | CODE: {s['code'].strip()[:50].replace('\\n', ' ')}...")
+                    print(f"    REAL: {s['doc'][:60].strip()}...")
                     print(f"    PRED: {prediction}")
                     print(f"    {'-'*20}")
         except Exception as e:
-            print(f"    ❌ Errore durante l'audit di {ckpt_name}: {e}")
+            print(f"    ❌ Critical Error su {ckpt_name}: {e}")
 
 if __name__ == "__main__":
     run_deep_audit()
@@ -684,44 +704,42 @@ from tokenizers import Tokenizer
 
 # --- [FASE 1] DATA SANITIZATION (GIGO Principle) ---
 def clean_docstring(doc):
-    """Rimuove rumore, tag Sphinx e residui di test dalle docstring."""
+    """Estrae l'essenza (Headline) della docstring rimuovendo il boilerplate tecnico."""
     if not doc: return ""
-    # Estraiamo solo il primo paragrafo significativo
+    # 1. Prendiamo solo la prima riga (Headline)
     first_line = doc.split('\n\n')[0].split('\n')[0]
-    # Pulizia tramite espressioni regolari
+    # 2. Pulizia tag tecnici (Sphinx/Google style)
     clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
+    # 3. Rimozione residui di doctest
     clean = re.sub(r'>>>.*', '', clean)
     return clean.strip()
 
 def compute_content_hash(code, doc):
-    """Genera una 'impronta digitale' del contenuto per la deduplicazione."""
-    # Normalizziamo rimuovendo gli spazi bianchi per trovare duplicati sintattici
+    """Genera un fingerprint per la deduplicazione deterministica."""
+    # Normalizzazione per evitare che spazi diversi creino hash diversi
     normalized = (re.sub(r'\s+', '', code) + doc).encode('utf-8')
     return hashlib.sha256(normalized).hexdigest()
 
-# --- [FASE 2] SERIALIZABLE COLLATOR (Fix per Windows/Spawn) ---
+# --- [FASE 2] SERIALIZABLE COLLATOR (Windows/Linux Agnostic) ---
 class SmartCollator:
-    """
-    Sostituisce la lambda function. Essendo una classe definita a livello 
-    di modulo, è 'Picklable' e non crasha su Windows con num_workers > 0.
-    """
     def __init__(self, pad_id):
         self.pad_id = pad_id
 
     def __call__(self, batch):
         code_seqs, doc_seqs = zip(*batch)
-        # Padding dinamico per ogni batch (efficienza computazionale)
+        # Il padding viene fatto al valore massimo del BATCH corrente (efficienza)
         code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=self.pad_id)
         doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=self.pad_id)
         return code_padded, doc_padded
 
-# --- [FASE 3] CORE DATASET ENGINE ---
+# --- [FASE 3] ASYMMETRIC DATASET ENGINE ---
 class CodeSummaryDataset(Dataset):
-    def __init__(self, data_dir, split_type, tokenizer_path, max_len=128, subset=None):
+    def __init__(self, data_dir, split_type, tokenizer_path, max_len_code=256, max_len_doc=64, subset=None):
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
-        self.max_len = max_len
+        self.max_len_code = max_len_code
+        self.max_len_doc = max_len_doc
         self.data = []
-        self.seen_hashes = set() # Barriera contro il Data Leakage
+        self.seen_hashes = set()
 
         search_pattern = os.path.join(data_dir, split_type, "*.jsonl.gz")
         files = glob.glob(search_pattern)
@@ -729,7 +747,7 @@ class CodeSummaryDataset(Dataset):
         if not files:
             raise FileNotFoundError(f"❌ Nessun file trovato in {search_pattern}")
 
-        print(f"🔍 Audit Dataset [{split_type}]: Scansione in corso...")
+        print(f"🔍 [AUDIT {split_type.upper()}] Caricamento asimmetrico in corso...")
 
         for file_path in files:
             with gzip.open(file_path, 'rt', encoding='utf-8') as f:
@@ -741,20 +759,20 @@ class CodeSummaryDataset(Dataset):
                         
                         clean_doc = clean_docstring(doc)
                         
-                        # Filtri di Qualità e Unicità
-                        if len(clean_doc) > 10 and 10 < len(code.split()) < 200:
+                        # FILTRI DI QUALITÀ (Review: 10 parole < codice < 200 parole)
+                        # Il codice viene tagliato a 256 token, quindi carichiamo campioni ragionevoli
+                        if len(clean_doc) > 10 and 10 < len(code.split()) < 250:
                             f_hash = compute_content_hash(code, clean_doc)
                             if f_hash not in self.seen_hashes:
                                 self.seen_hashes.add(f_hash)
                                 self.data.append({'code': code, 'doc': clean_doc})
                         
                         if subset and len(self.data) >= subset: break
-                    except: continue # Salta righe corrotte
+                    except: continue
                 if subset and len(self.data) >= subset: break
         
         print(f"✅ {split_type.upper()} pronto: {len(self.data)} campioni univoci.")
         
-        # Mapping ID Speciali
         self.pad_id = self.tokenizer.token_to_id("<PAD>")
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
         self.eos_id = self.tokenizer.token_to_id("<EOS>")
@@ -764,25 +782,29 @@ class CodeSummaryDataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.data[idx]
-        # Encoding con iniezione di SOS e EOS
+        
+        # Encoding asimmetrico: più spazio al codice, meno al riassunto
         c_tokens = self.tokenizer.encode(item['code']).ids
-        code_ids = [self.sos_id] + c_tokens[:self.max_len-2] + [self.eos_id]
+        code_ids = [self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id]
         
         d_tokens = self.tokenizer.encode(item['doc']).ids
-        doc_ids = [self.sos_id] + d_tokens[:self.max_len-2] + [self.eos_id]
+        doc_ids = [self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id]
         
         return torch.tensor(code_ids), torch.tensor(doc_ids)
 
 # --- [FASE 4] DATALOADER FACTORY ---
 def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
-    dataset = CodeSummaryDataset(data_dir, split_type, tokenizer_path, subset=subset)
+    # Passiamo le lunghezze asimmetriche al dataset
+    dataset = CodeSummaryDataset(
+        data_dir, split_type, tokenizer_path, 
+        max_len_code=256, 
+        max_len_doc=64, 
+        subset=subset
+    )
     
-    # Inizializzazione del collatore serializzabile
     collator = SmartCollator(dataset.pad_id)
     
-    # Adaptive Worker Logic
-    # Su Windows usiamo 0 workers se il dataset è piccolo per evitare overhead, 
-    # o comunque evitiamo i crash di spawn.
+    # Adaptive Multiprocessing
     is_windows = os.name == 'nt'
     workers = 0 if (is_windows or (subset and subset < 100)) else 2
 
@@ -933,7 +955,7 @@ def clean_docstring(doc):
     return clean.strip()
 
 # TOKENIZER TRAINING
-def train_bpe_tokenizer(files, save_path, vocab_size=10000):
+def train_bpe_tokenizer(files, save_path, vocab_size=20000):
 
     # Initialize a Byte-Level BPE tokenizer
     tokenizer = Tokenizer(models.BPE(unk_token="<UNK>"))
@@ -5020,36 +5042,58 @@ from models.encoder import Encoder
 from models.attention import Attention
 from models.decoder import Decoder
 from models.seq2seq import Seq2Seq
+from models.transformer import Seq2SeqTransformer # Assicurati che il file esista
 
 logger = logging.getLogger(__name__)
 
-def get_model_architecture(model_type, device, vocab_size=10000, config=None):
+def get_model_architecture(model_type, device, vocab_size=50000, config=None):
     """
-    Architecture Factory: Applica il principio di parsimonia.
+    Architecture Factory: Genera istanze di modelli basate su tag.
+    Implementa il pattern Abstract Factory per isolare la topologia dagli iperparametri.
     """
-    # Iperparametri calibrati per prevenire l'overfitting su subset medi (50k-100k)
-    ENC_EMB_DIM = 128   # Ridotto da 256
-    DEC_EMB_DIM = 128   # Ridotto da 256
-    HID_DIM = 256       # Ridotto da 512 per forzare la compressione
-    N_LAYERS = 2
-    ENC_DROPOUT = 0.5   # Dropout aggressivo per disturbare la memorizzazione
-    DEC_DROPOUT = 0.5
+    
+    # --- CONFIGURAZIONE DEFAULT (Override possibile tramite config) ---
+    # Usiamo un dizionario per mantenere l'ortogonalità
+    params = {
+        "emb_dim": 256,
+        "hid_dim": 512,
+        "n_layers": 2,
+        "dropout": 0.5,
+        "nhead": 8,            # Solo per Transformer
+        "transformer_layers": 6 # Solo per Transformer
+    }
+    
+    # Se passiamo un oggetto config (da argparse), facciamo l'override
+    if config:
+        # Esempio: params["hid_dim"] = getattr(config, "hid_dim", params["hid_dim"])
+        pass
 
     if model_type == "lstm_attention":
-        logger.info(f"Factory: Generazione LSTM-ATTN (Bottleneck: {HID_DIM} units)")
+        logger.info(f"🏗️ Factory: Generazione LSTM-ATTN | Vocab: {vocab_size} | Hidden: {params['hid_dim']}")
         
-        attn = Attention(HID_DIM)
-        enc = Encoder(vocab_size, ENC_EMB_DIM, HID_DIM, N_LAYERS, ENC_DROPOUT)
-        dec = Decoder(vocab_size, DEC_EMB_DIM, HID_DIM, N_LAYERS, DEC_DROPOUT, attn)
+        attn = Attention(params["hid_dim"])
+        enc = Encoder(vocab_size, params["emb_dim"], params["hid_dim"], params["n_layers"], params["dropout"])
+        dec = Decoder(vocab_size, params["emb_dim"], params["hid_dim"], params["n_layers"], params["dropout"], attn)
         
         return Seq2Seq(enc, dec, device).to(device)
 
     elif model_type == "transformer":
-        # Placeholder per evoluzione futura
-        raise NotImplementedError("Architettura Transformer in fase di progettazione.")
+        logger.info(f"⚡ Factory: Generazione Transformer | Heads: {params['nhead']} | Layers: {params['transformer_layers']}")
+        
+        # Implementazione Seq2SeqTransformer basata su PyTorch standard
+        model = Seq2SeqTransformer(
+            vocab_size=vocab_size,
+            d_model=params["hid_dim"], # Spesso hid_dim e d_model coincidono nei Transformer base
+            nhead=params["nhead"],
+            num_layers=params["transformer_layers"],
+            dropout=0.1 # I Transformer preferiscono dropout meno aggressivi delle LSTM
+        )
+        
+        return model.to(device)
 
     else:
-        raise ValueError(f"Tag '{model_type}' non riconosciuto.")
+        logger.error(f"❌ Factory Failure: Tag '{model_type}' non riconosciuto.")
+        raise ValueError(f"Tag '{model_type}' non supportato dalla factory.")
 
 ================================================================================
 
@@ -5089,6 +5133,80 @@ class Seq2Seq(nn.Module):
             input = trg[:, t] if teacher_force else top1
             
         return outputs
+
+================================================================================
+
+--- FILE: transformer.py | PATH: Project\models\transformer.py ---
+------------------------------------------------------------------
+
+import torch
+import torch.nn as nn
+import math
+
+class PositionalEncoding(nn.Module):
+    """
+    Inietta informazione sull'ordine dei token.
+    Senza questo, il Transformer tratterebbe il codice Python come un set di parole a caso.
+    """
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        # Calcolo dei coefficienti seno e coseno:
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
+
+    def forward(self, x):
+        # x shape: [batch_size, seq_len, d_model]
+        return x + self.pe[:, :x.size(1)]
+
+class Seq2SeqTransformer(nn.Module):
+    def __init__(self, vocab_size, d_model=512, nhead=8, num_layers=6, dim_feedforward=2048, dropout=0.1):
+        super().__init__()
+        self.model_type = 'Transformer'
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.pos_encoder = PositionalEncoding(d_model)
+        
+        self.transformer = nn.Transformer(
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_layers,
+            num_decoder_layers=num_layers,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True # Allineamento con il tuo Dataloader
+        )
+        
+        self.fc_out = nn.Linear(d_model, vocab_size)
+        self.d_model = d_model
+
+    def _generate_causal_mask(self, sz):
+        """Genera una maschera triangolare superiore per impedire al decoder di guardare al futuro."""
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def forward(self, src, trg, teacher_forcing_ratio=None, **kwargs):
+        """
+        NOTA: teacher_forcing_ratio è accettato per polimorfismo con l'LSTM, 
+        ma viene ignorato dal Transformer che usa il parallelismo causale.
+        """
+        # 1. Embedding + Positional Encoding
+        src_emb = self.pos_encoder(self.embedding(src) * math.sqrt(self.d_model))
+        trg_emb = self.pos_encoder(self.embedding(trg) * math.sqrt(self.d_model))
+        
+        # 2. Creazione della Look-ahead mask per il training parallelo
+        # Il decoder non deve 'sbirciare' i token successivi durante l'addestramento
+        trg_mask = self._generate_causal_mask(trg.size(1)).to(src.device)
+
+        # 3. Transformer Forward Pass
+        # src_key_padding_mask potrebbe essere aggiunto qui per ignorare i token <PAD>
+        output = self.transformer(src_emb, trg_emb, tgt_mask=trg_mask)
+        
+        # 4. Proiezione sul vocabolario
+        return self.fc_out(output)
 
 ================================================================================
 
