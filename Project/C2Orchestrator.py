@@ -107,6 +107,7 @@ class CodeSummarizationPipeline:
         valid_loader = get_dataloader(self.jsonl_base, "valid", self.tokenizer_path, self.config.batch_size, subset=self.config.subset // 5 if self.config.subset else None)
 
         try:
+            # Model training
             t_train_start = time.time()
             model = get_model_architecture(model_tag, self.device, vocab_size=vocab_size)
             train_model(model, train_loader, valid_loader, self.config, self.device, telemetry=telemetry)

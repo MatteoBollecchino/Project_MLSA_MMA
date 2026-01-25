@@ -5,6 +5,7 @@ import io
 
 # DOWNLOAD AND EXTRACTION OF CODESEARCHNET ROBUST DATASET
 def download_codesearchnet_robust(output_dir="Project/Datasets"):
+    """ Downloads and extracts the CodeSearchNet Robust dataset from a reliable source. """
 
     # Mirror on Hugging Face Assets - the most stable at the moment
     url = "https://huggingface.co/datasets/code_search_net/resolve/main/data/python.zip"

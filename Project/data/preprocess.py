@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 # DATA PREPROCESSING 
 # Removes noise from docstrings (GIGO Principle). Takes only the first line and removes Sphinx/doctest tags.
 def clean_docstring(doc):
+    """ Cleans a docstring by removing noise such as Sphinx/doctest tags and taking only the first line. """
+
     if not doc: return ""
 
     # 1. Take only the first part before an empty line or a period
@@ -27,6 +29,7 @@ def clean_docstring(doc):
 
 # TOKENIZER TRAINING
 def train_bpe_tokenizer(files, save_path, vocab_size=20000):
+    """ Trains a Byte-Pair Encoding (BPE) tokenizer on the provided files and saves it. """
 
     # Initialize a Byte-Level BPE tokenizer
     tokenizer = Tokenizer(models.BPE(unk_token="<UNK>"))
@@ -50,6 +53,7 @@ def train_bpe_tokenizer(files, save_path, vocab_size=20000):
 # PREPARE VOCABULARY FROM DATASET
 # Scans ONLY the Python data folder and extracts the clean corpus.
 def prepare_vocab(jsonl_base_dir, tokenizer_path):
+    """ Prepares the BPE tokenizer vocabulary from the CodeSearchNet dataset. """
     
     # Sandboxing: we target only the train folder of the extracted data
     search_pattern = os.path.join(jsonl_base_dir, "train", "*.jsonl.gz")

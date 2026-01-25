@@ -5,6 +5,7 @@ import glob
 
 # GENERATE HUMAN-READABLE SAMPLES FOR DATA INSPECTION
 def save_human_readable_samples(datasets_dir="Project/Datasets", output_subdir="Human_readable_sample", num_examples=100):
+    """ Saves human-readable samples from the CodeSearchNet dataset for inspection. """
 
     # Define the full path for the folder and file
     full_output_dir = os.path.join(datasets_dir, output_subdir)

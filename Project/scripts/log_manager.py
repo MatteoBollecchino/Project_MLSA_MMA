@@ -10,6 +10,8 @@ class ExecutionLogger:
 
     # Initialization of the logger
     def __init__(self, root_dir, model_tag, subset_size=None):
+        """ Initializes the Execution Logger. """
+
         self.start_time = datetime.now()
 
         # Tag that identifies the model architecture
@@ -41,6 +43,7 @@ class ExecutionLogger:
 
     # Fingerprints hardware per telemetric audit.
     def log_sys_info(self):
+        """ Logs system information such as OS, Python version, and GPU details."""
 
         # System Information
         info = {
@@ -57,12 +60,16 @@ class ExecutionLogger:
 
     # Logs the duration of a macro-phase (e.g., data loading).
     def log_phase(self, phase_name, duration_seconds):
+        """ Logs the duration of a macro-phase (e.g., data loading)."""
+
         dur_str = f"{duration_seconds:.2f}s"
         self.data["durations"][phase_name] = dur_str
         self._write_to_file(f"[TIMER] Phase '{phase_name}' completed in {dur_str}\n")
 
     # Details about the tokenizer pipeline.
     def log_tokenizer_info(self, vocab_size, reused=True, duration=0):
+        """ Logs details about the tokenizer pipeline."""
+
         tok_info = {
             "vocab_size": vocab_size,
             "status": "REUSED" if reused else "NEWLY_TRAINED",
@@ -73,6 +80,8 @@ class ExecutionLogger:
 
     # Granular logging for each training epoch.
     def log_epoch(self, epoch, train_loss, val_loss, lr, epoch_duration):
+        """ Granular logging for each training epoch. """
+
         entry = {
             "epoch": epoch,
             "train_loss": train_loss,
@@ -88,6 +97,8 @@ class ExecutionLogger:
 
     # Logs the final evaluation metrics after training.
     def log_final_metrics(self, df_metrics, mode="fast"):
+        """Logs the final evaluation metrics after training."""
+
         metrics = df_metrics.to_dict(orient='records')[0] if df_metrics is not None and not df_metrics.empty else {}
         metrics["eval_mode"] = mode
         self.data["evaluation"] = metrics
@@ -96,6 +107,8 @@ class ExecutionLogger:
     # Finalizes the logging by renaming the file with a timestamp prefix.
     # Renames the file with an ISO 8601 chronological prefix for LIFO ordering.
     def finalize(self):
+        """Renames the file with an ISO 8601 chronological prefix for LIFO ordering."""
+
         end_time = datetime.now()
         total_duration = end_time - self.start_time
         self.data["durations"]["total_execution"] = str(total_duration)
@@ -134,5 +147,7 @@ class ExecutionLogger:
 
     # Internal method to append text to the log file.
     def _write_to_file(self, text):
+        """ Appends text to the log file. """
+
         with open(self.file_path, "a", encoding="utf-8") as f:
             f.write(text)
