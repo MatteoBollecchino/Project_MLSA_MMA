@@ -5,10 +5,10 @@ Project/
 ├───C2Orchestrator.py
 ├───colab_remote_exec.txt
 ├───configs.txt
+├───evaluate.py
 ├───requirements.txt
 ├───test.py
 ├───test_audit.py
-├───tokenizer.json
 ├───data/
     ├───README.md
     ├───dataset.py
@@ -47,11 +47,10 @@ Project/
     ├───encoder.py
     ├───factory.py
     ├───seq2seq.py
+    ├───transformer.py
     ├───checkpoints/
-        ├───best_lstm_attentionTot.pt
 ├───scripts/
     ├───README.md
-    ├───evaluate.py
     ├───train.py
 ├───src/
     ├───README.md

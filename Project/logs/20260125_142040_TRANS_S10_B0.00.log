@@ -1,0 +1,44 @@
+--- INFRASTRUCTURE ---
+{
+    "os": "Windows",
+    "python": "3.13.9",
+    "device": "cpu"
+}
+[TIMER] Phase 'data_infrastructure' completed in 0.00s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "REUSED",
+    "duration": "0.00s"
+}
+Epoch 01 | Loss: 10.1401 | Val: 10.0102 | LR: 0.000260 | Time: 2.86s
+Epoch 02 | Loss: 9.6911 | Val: 9.6725 | LR: 0.000500 | Time: 2.65s
+Epoch 03 | Loss: 8.8210 | Val: 9.6290 | LR: 0.000475 | Time: 2.43s
+Epoch 04 | Loss: 8.3903 | Val: 9.4984 | LR: 0.000406 | Time: 2.55s
+Epoch 05 | Loss: 7.9527 | Val: 9.4166 | LR: 0.000306 | Time: 2.47s
+Epoch 06 | Loss: 7.6656 | Val: 9.3663 | LR: 0.000194 | Time: 2.64s
+Epoch 07 | Loss: 7.4632 | Val: 9.3302 | LR: 0.000094 | Time: 2.66s
+Epoch 08 | Loss: 7.3182 | Val: 9.3120 | LR: 0.000025 | Time: 2.83s
+Epoch 09 | Loss: 7.2288 | Val: 9.3067 | LR: 0.000000 | Time: 2.86s
+Epoch 10 | Loss: 7.2009 | Val: 9.3067 | LR: 0.000025 | Time: 2.72s
+[TIMER] Phase 'model_training' completed in 31.66s
+[TIMER] Phase 'evaluation_instant' completed in 546.28s
+
+--- FINAL EVALUATION (INSTANT) ---
+{
+    "file": "20260125_1420_transformer_sub10.pt",
+    "bleu": 0.00012078743167681102,
+    "rougeL": 0.0,
+    "eval_mode": "instant"
+}
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "0.00s",
+    "model_training": "31.66s",
+    "evaluation_instant": "546.28s",
+    "total_execution": "0:09:38.022916"
+}
+
+--- FINISHED ---
+Total Duration: 0:09:38.022916
