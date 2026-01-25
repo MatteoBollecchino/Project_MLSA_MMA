@@ -10,11 +10,8 @@ from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 logger = logging.getLogger(__name__)
 
 # DATA PREPROCESSING 
+# Removes noise from docstrings (GIGO Principle). Takes only the first line and removes Sphinx/doctest tags.
 def clean_docstring(doc):
-    """
-    Removes noise from docstrings (GIGO Principle).
-    Takes only the first line and removes Sphinx/doctest tags.
-    """
     if not doc: return ""
 
     # 1. Take only the first part before an empty line or a period
@@ -43,16 +40,17 @@ def train_bpe_tokenizer(files, save_path, vocab_size=20000):
     )
     
     logger.info(f"Training BPE Tokenizer (Vocab: {vocab_size})...")
+
     # Train the tokenizer on the provided files
-    tokenizer.train(files, trainer) #SIIUUUm
+    tokenizer.train(files, trainer)
+
     # Save the trained tokenizer to disk
     tokenizer.save(save_path)
 
 # PREPARE VOCABULARY FROM DATASET
+# Scans ONLY the Python data folder and extracts the clean corpus.
 def prepare_vocab(jsonl_base_dir, tokenizer_path):
-    """
-    Scans ONLY the Python data folder and extracts the clean corpus.
-    """
+    
     # Sandboxing: we target only the train folder of the extracted data
     search_pattern = os.path.join(jsonl_base_dir, "train", "*.jsonl.gz")
     train_files = glob.glob(search_pattern)
