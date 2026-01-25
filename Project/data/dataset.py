@@ -11,34 +11,44 @@ import multiprocessing
 from tqdm import tqdm
 from tokenizers import Tokenizer
 
-# --- [FASE 1] DATA SANITIZATION (GIGO Principle) o vediamo se ora funziona eh ---
+# --- [PHASE 1] DATA SANITIZATION ---
+
+# Extracts the essence of the docstring by removing technical noise.
 def clean_docstring(doc):
-    """Estrae l'essenza della docstring rimuovendo il rumore tecnico."""
     if not doc: return ""
+
+    # Focus on the first line and remove common annotations
     first_line = doc.split('\n\n')[0].split('\n')[0]
     clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
     clean = re.sub(r'>>>.*', '', clean)
+
     return clean.strip()
 
+# Deterministic fingerprint for deduplication.
 def compute_content_hash(code, doc):
-    """Fingerprint deterministico per la deduplicazione."""
     normalized = (re.sub(r'\s+', '', code) + doc).encode('utf-8')
     return hashlib.sha256(normalized).hexdigest()
 
-# --- [FASE 2] OPTIMIZED COLLATOR ---
+# --- [PHASE 2] OPTIMIZED COLLATOR ---
 class SmartCollator:
+    # Stores the padding token ID (usually 0). This number will be used to "fill" empty gaps.
     def __init__(self, pad_id):
         self.pad_id = pad_id
 
+    # Dynamic padding based on the longest sequence in the batch
     def __call__(self, batch):
         code_seqs, doc_seqs = zip(*batch)
-        # Padding dinamico al batch_max per efficienza computazionale
+
+        # Dynamic padding to batch_max for computational efficiency
         code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=self.pad_id)
         doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=self.pad_id)
+
         return code_padded, doc_padded
 
-# --- [FASE 3] ASYMMETRIC CACHING ENGINE ---
+# --- [PHASE 3] ASYMMETRIC CACHING ENGINE ---
 class CodeSummaryDataset(Dataset):
+
+    # Initializes the dataset by loading and tokenizing data into memory.
     def __init__(self, data_dir, split_type, tokenizer_path, max_len_code=256, max_len_doc=64, subset=None):
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.max_len_code = max_len_code
@@ -46,27 +56,32 @@ class CodeSummaryDataset(Dataset):
         self.data = []
         self.seen_hashes = set()
 
-        # Pre-fetch ID token speciali
+        # Pre-fetch special token IDs
         self.pad_id = self.tokenizer.token_to_id("<PAD>")
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
         self.eos_id = self.tokenizer.token_to_id("<EOS>")
 
+        # Load and tokenize data into memory
         search_pattern = os.path.join(data_dir, split_type, "*.jsonl.gz")
         files = glob.glob(search_pattern)
         
         if not files:
-            raise FileNotFoundError(f"❌ Sorgente dati non trovata: {search_pattern}")
+            raise FileNotFoundError(f"❌ Data source not found: {search_pattern}")
 
-        print(f"🔍 [MEM_CACHE] Caricamento e Tokenizzazione '{split_type}'...")
+        print(f"🔍 [MEM_CACHE] Loading and Tokenizing '{split_type}'...")
 
         for file_path in files:
             with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-                # Usiamo tqdm per monitorare il caricamento iniziale (che sarà più lento, ma salva l'epoca)
+                # Use tqdm to monitor the initial loading (which will be slower but saves the epoch)
                 for line in f:
                     try:
+
+                        # Parse JSON line and extract relevant fields
                         item = json.loads(line)
                         code = item.get('code', item.get('func_code_string', ''))
                         doc = item.get('docstring', item.get('func_documentation_string', ''))
+
+                        # Data sanitization
                         clean_doc = clean_docstring(doc)
                         
                         if len(clean_doc) > 10 and 10 < len(code.split()) < 250:
@@ -74,11 +89,12 @@ class CodeSummaryDataset(Dataset):
                             if f_hash not in self.seen_hashes:
                                 self.seen_hashes.add(f_hash)
                                 
-                                # --- [CRITICO] TOKENIZZAZIONE A MONTE ---
-                                # Trasformiamo subito in tensori per liberare la CPU durante il training
+                                # --- [CRITICAL] PRE-TOKENIZATION ---
+                                # Immediately convert to tensors to free up CPU during training
                                 c_tokens = self.tokenizer.encode(code).ids
                                 d_tokens = self.tokenizer.encode(clean_doc).ids
                                 
+                                # Create tensors with SOS and EOS tokens
                                 code_tensor = torch.tensor([self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id])
                                 doc_tensor = torch.tensor([self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id])
                                 
@@ -88,16 +104,18 @@ class CodeSummaryDataset(Dataset):
                     except: continue
                 if subset and len(self.data) >= subset: break
         
-        print(f"✅ Cache Pronta: {len(self.data)} campioni caricati in RAM.")
+        print(f"✅ Cache Ready: {len(self.data)} samples loaded into RAM.")
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        # Restituiamo i tensori pre-calcolati: Zero overhead CPU durante l'epoca
+        # Return pre-calculated tensors: Zero CPU overhead during epoch
         return self.data[idx]
 
-# --- [FASE 4] HIGH-THROUGHPUT FACTORY ---
+# --- [PHASE 4] HIGH-THROUGHPUT FACTORY ---
+
+# Returns the dataloader
 def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
     dataset = CodeSummaryDataset(
         data_dir, split_type, tokenizer_path, 
@@ -108,7 +126,7 @@ def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=
     
     collator = SmartCollator(dataset.pad_id)
     
-    # Su Windows con RTX 40, usiamo 4 workers e prefetch aggressivo
+    # On Windows with RTX 40, we use 4 workers and aggressive prefetching
     cpu_count = multiprocessing.cpu_count()
     workers = min(cpu_count, 4) if torch.cuda.is_available() else 0
     
@@ -118,7 +136,7 @@ def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=
         shuffle=shuffle, 
         collate_fn=collator,
         num_workers=workers,
-        pin_memory=True, # Velocizza il trasferimento PCIe verso la GPU
+        pin_memory=True, # Speeds up PCIe transfer to GPU
         prefetch_factor=2 if workers > 0 else None,
         persistent_workers=True if workers > 0 else False
     )
