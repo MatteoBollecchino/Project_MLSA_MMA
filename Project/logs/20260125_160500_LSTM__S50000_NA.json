@@ -1,0 +1,23 @@
+{
+    "metadata": {
+        "model_type": "lstm_attention",
+        "subset": 50000,
+        "start_time": "2026-01-25T16:05:00.447515",
+        "tokenizer": {
+            "vocab_size": 20000,
+            "status": "REUSED",
+            "duration": "0.00s"
+        }
+    },
+    "durations": {
+        "data_infrastructure": "0.00s",
+        "total_execution": "0:01:14.688869"
+    },
+    "infrastructure": {
+        "os": "Windows",
+        "python": "3.13.9",
+        "device": "cpu"
+    },
+    "training_history": [],
+    "evaluation": {}
+}

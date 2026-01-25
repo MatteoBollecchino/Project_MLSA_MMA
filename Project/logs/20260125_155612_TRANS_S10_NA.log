@@ -1,0 +1,34 @@
+--- INFRASTRUCTURE ---
+{
+    "os": "Windows",
+    "python": "3.13.9",
+    "device": "cpu"
+}
+[TIMER] Phase 'data_infrastructure' completed in 0.00s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "NEWLY_TRAINED",
+    "duration": "40.37s"
+}
+Epoch 01 | Loss: 10.2019 | Val: 9.8565 | LR: 0.000260 | Time: 3.65s
+Epoch 02 | Loss: 9.7825 | Val: 9.6975 | LR: 0.000500 | Time: 3.11s
+Epoch 03 | Loss: 8.8897 | Val: 9.4732 | LR: 0.000475 | Time: 3.05s
+Epoch 04 | Loss: 8.2952 | Val: 9.4061 | LR: 0.000406 | Time: 3.26s
+Epoch 05 | Loss: 7.9189 | Val: 9.3396 | LR: 0.000306 | Time: 3.52s
+Epoch 06 | Loss: 7.6421 | Val: 9.2737 | LR: 0.000194 | Time: 3.15s
+Epoch 07 | Loss: 7.4467 | Val: 9.2325 | LR: 0.000094 | Time: 2.86s
+Epoch 08 | Loss: 7.3143 | Val: 9.2100 | LR: 0.000025 | Time: 2.79s
+Epoch 09 | Loss: 7.2341 | Val: 9.2034 | LR: 0.000000 | Time: 3.20s
+Epoch 10 | Loss: 7.1786 | Val: 9.2034 | LR: 0.000025 | Time: 2.88s
+[TIMER] Phase 'model_training' completed in 40.14s
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "0.00s",
+    "model_training": "40.14s",
+    "total_execution": "0:04:43.196999"
+}
+
+--- FINISHED ---
+Total Duration: 0:04:43.196999

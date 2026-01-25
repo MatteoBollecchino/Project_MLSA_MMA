@@ -1,0 +1,52 @@
+{
+    "metadata": {
+        "model_type": "transformer",
+        "subset": 10,
+        "start_time": "2026-01-25T16:03:47.291891",
+        "tokenizer": {
+            "vocab_size": 20000,
+            "status": "REUSED",
+            "duration": "0.00s"
+        }
+    },
+    "durations": {
+        "data_infrastructure": "0.01s",
+        "total_execution": "0:00:17.269639"
+    },
+    "infrastructure": {
+        "os": "Windows",
+        "python": "3.13.9",
+        "device": "cpu"
+    },
+    "training_history": [
+        {
+            "epoch": 1,
+            "train_loss": 10.136070251464844,
+            "val_loss": 9.919647216796875,
+            "lr": 0.00026000000000000003,
+            "duration": "2.73s"
+        },
+        {
+            "epoch": 2,
+            "train_loss": 9.748411178588867,
+            "val_loss": 9.623082160949707,
+            "lr": 0.0005,
+            "duration": "2.98s"
+        },
+        {
+            "epoch": 3,
+            "train_loss": 8.863858222961426,
+            "val_loss": 9.397599220275879,
+            "lr": 0.0004752423160067368,
+            "duration": "2.91s"
+        },
+        {
+            "epoch": 4,
+            "train_loss": 8.362601280212402,
+            "val_loss": 9.230659484863281,
+            "lr": 0.0004058728269748815,
+            "duration": "2.76s"
+        }
+    ],
+    "evaluation": {}
+}

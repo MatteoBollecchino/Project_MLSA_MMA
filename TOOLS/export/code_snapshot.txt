@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-25 15:36:46
+Generated on: 2026-01-25 16:09:54
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -726,39 +726,37 @@ import os
 import glob
 import re
 import hashlib
+import multiprocessing
+from tqdm import tqdm
 from tokenizers import Tokenizer
 
-# --- [FASE 1] DATA SANITIZATION (GIGO Principle) ---
+# --- [FASE 1] DATA SANITIZATION (GIGO Principle) o vediamo se ora funziona eh ---
 def clean_docstring(doc):
-    """Estrae l'essenza (Headline) della docstring rimuovendo il boilerplate tecnico."""
+    """Estrae l'essenza della docstring rimuovendo il rumore tecnico."""
     if not doc: return ""
-    # 1. Prendiamo solo la prima riga (Headline)
     first_line = doc.split('\n\n')[0].split('\n')[0]
-    # 2. Pulizia tag tecnici (Sphinx/Google style)
     clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
-    # 3. Rimozione residui di doctest
     clean = re.sub(r'>>>.*', '', clean)
     return clean.strip()
 
 def compute_content_hash(code, doc):
-    """Genera un fingerprint per la deduplicazione deterministica."""
-    # Normalizzazione per evitare che spazi diversi creino hash diversi
+    """Fingerprint deterministico per la deduplicazione."""
     normalized = (re.sub(r'\s+', '', code) + doc).encode('utf-8')
     return hashlib.sha256(normalized).hexdigest()
 
-# --- [FASE 2] SERIALIZABLE COLLATOR (Windows/Linux Agnostic) ---
+# --- [FASE 2] OPTIMIZED COLLATOR ---
 class SmartCollator:
     def __init__(self, pad_id):
         self.pad_id = pad_id
 
     def __call__(self, batch):
         code_seqs, doc_seqs = zip(*batch)
-        # Il padding viene fatto al valore massimo del BATCH corrente (efficienza)
+        # Padding dinamico al batch_max per efficienza computazionale
         code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=self.pad_id)
         doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=self.pad_id)
         return code_padded, doc_padded
 
-# --- [FASE 3] ASYMMETRIC DATASET ENGINE ---
+# --- [FASE 3] ASYMMETRIC CACHING ENGINE ---
 class CodeSummaryDataset(Dataset):
     def __init__(self, data_dir, split_type, tokenizer_path, max_len_code=256, max_len_doc=64, subset=None):
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
@@ -767,60 +765,59 @@ class CodeSummaryDataset(Dataset):
         self.data = []
         self.seen_hashes = set()
 
+        # Pre-fetch ID token speciali
+        self.pad_id = self.tokenizer.token_to_id("<PAD>")
+        self.sos_id = self.tokenizer.token_to_id("<SOS>")
+        self.eos_id = self.tokenizer.token_to_id("<EOS>")
+
         search_pattern = os.path.join(data_dir, split_type, "*.jsonl.gz")
         files = glob.glob(search_pattern)
         
         if not files:
-            raise FileNotFoundError(f"❌ Nessun file trovato in {search_pattern}")
+            raise FileNotFoundError(f"❌ Sorgente dati non trovata: {search_pattern}")
 
-        print(f"🔍 [AUDIT {split_type.upper()}] Caricamento asimmetrico in corso...")
+        print(f"🔍 [MEM_CACHE] Caricamento e Tokenizzazione '{split_type}'...")
 
         for file_path in files:
             with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                # Usiamo tqdm per monitorare il caricamento iniziale (che sarà più lento, ma salva l'epoca)
                 for line in f:
                     try:
                         item = json.loads(line)
                         code = item.get('code', item.get('func_code_string', ''))
                         doc = item.get('docstring', item.get('func_documentation_string', ''))
-                        
                         clean_doc = clean_docstring(doc)
                         
-                        # FILTRI DI QUALITÀ (Review: 10 parole < codice < 200 parole)
-                        # Il codice viene tagliato a 256 token, quindi carichiamo campioni ragionevoli
                         if len(clean_doc) > 10 and 10 < len(code.split()) < 250:
                             f_hash = compute_content_hash(code, clean_doc)
                             if f_hash not in self.seen_hashes:
                                 self.seen_hashes.add(f_hash)
-                                self.data.append({'code': code, 'doc': clean_doc})
+                                
+                                # --- [CRITICO] TOKENIZZAZIONE A MONTE ---
+                                # Trasformiamo subito in tensori per liberare la CPU durante il training
+                                c_tokens = self.tokenizer.encode(code).ids
+                                d_tokens = self.tokenizer.encode(clean_doc).ids
+                                
+                                code_tensor = torch.tensor([self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id])
+                                doc_tensor = torch.tensor([self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id])
+                                
+                                self.data.append((code_tensor, doc_tensor))
                         
                         if subset and len(self.data) >= subset: break
                     except: continue
                 if subset and len(self.data) >= subset: break
         
-        print(f"✅ {split_type.upper()} pronto: {len(self.data)} campioni univoci.")
-        
-        self.pad_id = self.tokenizer.token_to_id("<PAD>")
-        self.sos_id = self.tokenizer.token_to_id("<SOS>")
-        self.eos_id = self.tokenizer.token_to_id("<EOS>")
+        print(f"✅ Cache Pronta: {len(self.data)} campioni caricati in RAM.")
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        item = self.data[idx]
-        
-        # Encoding asimmetrico: più spazio al codice, meno al riassunto
-        c_tokens = self.tokenizer.encode(item['code']).ids
-        code_ids = [self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id]
-        
-        d_tokens = self.tokenizer.encode(item['doc']).ids
-        doc_ids = [self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id]
-        
-        return torch.tensor(code_ids), torch.tensor(doc_ids)
+        # Restituiamo i tensori pre-calcolati: Zero overhead CPU durante l'epoca
+        return self.data[idx]
 
-# --- [FASE 4] DATALOADER FACTORY ---
+# --- [FASE 4] HIGH-THROUGHPUT FACTORY ---
 def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
-    # Passiamo le lunghezze asimmetriche al dataset
     dataset = CodeSummaryDataset(
         data_dir, split_type, tokenizer_path, 
         max_len_code=256, 
@@ -830,18 +827,19 @@ def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=
     
     collator = SmartCollator(dataset.pad_id)
     
-    # Adaptive Multiprocessing
-    is_windows = os.name == 'nt'
-    workers = 0 if (is_windows or (subset and subset < 100)) else 2
-
+    # Su Windows con RTX 40, usiamo 4 workers e prefetch aggressivo
+    cpu_count = multiprocessing.cpu_count()
+    workers = min(cpu_count, 4) if torch.cuda.is_available() else 0
+    
     return DataLoader(
         dataset, 
         batch_size=batch_size, 
         shuffle=shuffle, 
         collate_fn=collator,
         num_workers=workers,
-        pin_memory=True if torch.cuda.is_available() else False,
-        prefetch_factor=2 if workers > 0 else None
+        pin_memory=True, # Velocizza il trasferimento PCIe verso la GPU
+        prefetch_factor=2 if workers > 0 else None,
+        persistent_workers=True if workers > 0 else False
     )
 
 ================================================================================
@@ -1054,7 +1052,7 @@ def prepare_vocab(jsonl_base_dir, tokenizer_path):
 ----------------------------------------------------------------------------------------------
 
 === DATASET PREVIEW - CODE SEARCH NET (PYTHON) ===
-Source File: c:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project\Datasets\python\final\jsonl\train\python_train_0.jsonl.gz
+Source File: C:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project\Datasets\python\final\jsonl\train\python_train_0.jsonl.gz
 
 --- SAMPLE #1 ---
 DOCSTRING: Trains a k-nearest neighbors classifier for face recognition.
