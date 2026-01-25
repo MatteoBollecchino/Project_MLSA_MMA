@@ -57,6 +57,7 @@ def get_model_architecture(model_type, device, vocab_size=50000, config=None):
             dropout=0.1 # Transformers prefer less aggressive dropout than LSTMs
         )
         
+        # Transformer Model
         return model.to(device)
 
     else:

@@ -60,6 +60,7 @@ class CodeSummarizationPipeline:
     # Execution of the training pipeline
     def _execute_training(self):
         """Manages the entire training and telemetry pipeline."""
+        
         # Initialization of telemetry specific to training
         telemetry = ExecutionLogger(self.root, self.config.model, self.config.subset)
         telemetry.log_sys_info()

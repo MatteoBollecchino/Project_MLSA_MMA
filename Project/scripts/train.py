@@ -5,10 +5,14 @@ import logging
 import time # Indispensabile per il profiling
 from tqdm import tqdm
 
+# Logger Configuration
 logger = logging.getLogger(__name__)
 
+# --- [TRAINING FUNCTION] ---
 def train_model(model, train_loader, valid_loader, config, device, telemetry=None):
-    # --- [FASE 0] AUDIT HARDWARE ---
+    """ Trains the model for a specified number of epochs using the provided data loaders and configuration. """
+
+    # --- [PHASE 0] AUDIT HARDWARE ---
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"🚀 TRAINING START | Params: {total_params:,} | Device: {device}")
 
@@ -16,10 +20,11 @@ def train_model(model, train_loader, valid_loader, config, device, telemetry=Non
     if steps_per_epoch == 0:
         raise ValueError("❌ Il train_loader è vuoto.")
 
+    # --- [PHASE 1] OPTIMIZER AND CRITERION CONFIGURATION ---
     criterion = nn.CrossEntropyLoss(ignore_index=0, label_smoothing=0.1)
     optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.01)
 
-    # Configurazione OneCycleLR con protezione per piccoli subset
+    # OneCycleLR configuration with protection for small subsets
     total_steps = config.epochs * steps_per_epoch
     if total_steps < 2:
         scheduler = None
@@ -33,7 +38,7 @@ def train_model(model, train_loader, valid_loader, config, device, telemetry=Non
     best_valid_loss = float('inf')
 
     for epoch in range(config.epochs):
-        epoch_start_time = time.time() # ⏱️ START TIMER EPOCA
+        epoch_start_time = time.time() # ⏱️ START TIMER EPOCH
         model.train()
         train_loss = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.epochs}")
@@ -66,19 +71,19 @@ def train_model(model, train_loader, valid_loader, config, device, telemetry=Non
             current_lr = optimizer.param_groups[0]['lr']
             pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{current_lr:.6f}")
 
-        # --- FINE EPOCA: CALCOLO METRICHE E TEMPI ---
-        epoch_duration = time.time() - epoch_start_time # ⏱️ STOP TIMER EPOCA
+        # --- END EPOCH: CALCULATE METRICS AND TIMING ---
+        epoch_duration = time.time() - epoch_start_time # ⏱️ STOP TIMER EPOCH
         avg_train_loss = train_loss / steps_per_epoch
         valid_loss = evaluate_validation(model, valid_loader, criterion, device)
         
-        # --- [TELEMETRIA] Chiamata aggiornata con epoch_duration ---
+        # --- [TELEMETRY] Updated call with epoch_duration ---
         if telemetry:
             telemetry.log_epoch(
                 epoch=epoch + 1, 
                 train_loss=avg_train_loss, 
                 val_loss=valid_loss, 
                 lr=current_lr, 
-                epoch_duration=epoch_duration # Il parametro mancante
+                epoch_duration=epoch_duration # The missing parameter
             )
         
         status_msg = f"Epoch {epoch+1} | Loss: {avg_train_loss:.4f} | Val: {valid_loss:.4f} | Time: {epoch_duration:.2f}s"
