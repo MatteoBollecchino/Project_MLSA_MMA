@@ -40,6 +40,9 @@ Project/
                     ├───python_train_9.jsonl.gz
                 ├───valid/
                     ├───python_valid_0.jsonl.gz
+├───logs/
+    ├───20260125_142040_TRANS_S10_B0.00.json
+    ├───20260125_142040_TRANS_S10_B0.00.log
 ├───models/
     ├───README.md
     ├───attention.py
@@ -51,6 +54,7 @@ Project/
     ├───checkpoints/
 ├───scripts/
     ├───README.md
+    ├───log_manager.py
     ├───train.py
 ├───src/
     ├───README.md
