@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-25 12:22:14
+Generated on: 2026-01-25 15:36:46
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -10,7 +10,9 @@ import os
 import argparse
 import logging
 import torch
+import time
 from datetime import datetime
+from tokenizers import Tokenizer
 
 # Import interni
 from data.download_dataset import download_codesearchnet_robust
@@ -19,6 +21,8 @@ from data.preprocess import prepare_vocab
 from data.dataset import get_dataloader
 from models.factory import get_model_architecture
 from scripts.train import train_model 
+from scripts.log_manager import ExecutionLogger 
+from evaluate import BatchEvaluator 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -26,91 +30,164 @@ logger = logging.getLogger(__name__)
 class CodeSummarizationPipeline:
     def __init__(self, config):
         self.config = config
-        
-        # --- LOGICA DI AUTO-IDENTIFICAZIONE (Mental Model: Context Encapsulation) ---
-        # Otteniamo la cartella dove si trova FISICAMENTE questo script (C2Orchestrator.py)
         self.root = os.path.dirname(os.path.abspath(__file__))
-        
-        # Definiamo i percorsi partendo dalla root dello script
         self.data_root = os.path.join(self.root, "Datasets")
         self.jsonl_base = os.path.join(self.data_root, "python", "final", "jsonl")
         self.tokenizer_path = os.path.join(self.root, "tokenizer.json")
         self.checkpoint_dir = os.path.join(self.root, "models", "checkpoints")
-        self.preview_subdir = "Human_readable_sample"
-        
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        logger.info(f"[*] Pipeline Root identificata in: {self.root}")
-        logger.info(f"[*] Hardware Target: {self.device}")
+        # Mapping Fedeltà Valutazione
+        self.eval_map = {"instant": 100, "fast": 200, "deep": 1000}
+        self.eval_samples = self.eval_map[self.config.evaluation]
 
     def run(self):
-        logger.info("--- MASTER PIPELINE START ---")
+        logger.info(f"--- MASTER PIPELINE START | Mode: {self.config.mode.upper()} ---")
+        
+        if self.config.mode == "train":
+            if not self.config.model:
+                logger.error("❌ Errore: In modalità 'train' il parametro --model è OBBLIGATORIO.")
+                return
+            self._execute_training()
+        else:
+            self._execute_audit()
 
-        # FASE 1 & 2: INFRASTRUTTURA DATI
+    def _execute_training(self):
+        """Gestisce l'intera pipeline di addestramento e telemetria."""
+        # Inizializzazione Telemetria specifica per il training
+        telemetry = ExecutionLogger(self.root, self.config.model, self.config.subset)
+        telemetry.log_sys_info()
+
+        # FASE 1: DATA INFRASTRUCTURE
+        t0 = time.time()
         if not os.path.exists(self.jsonl_base) or self.config.force_download:
-            logger.info("Fase 1: Acquisizione dataset...")
             download_codesearchnet_robust(self.data_root)
+        save_human_readable_samples(self.data_root, "Human_readable_sample")
+        telemetry.log_phase("data_infrastructure", time.time() - t0)
 
-        save_human_readable_samples(self.data_root, self.preview_subdir)
-
-        if not os.path.exists(self.tokenizer_path) or self.config.force_preprocess:
-            logger.info("Fase 2: Fitting del Tokenizer...")
+        # FASE 2: TOKENIZER
+        t0 = time.time()
+        reused = os.path.exists(self.tokenizer_path) and not self.config.force_preprocess
+        if not reused:
             prepare_vocab(self.jsonl_base, self.tokenizer_path)
-
-        if self.config.skip_train:
-            logger.info("Fase 4: Modalità ispezione attiva. Fine corsa.")
-            return
+        tokenizer_duration = time.time() - t0
+        
+        tmp_tok = Tokenizer.from_file(self.tokenizer_path)
+        vocab_size = tmp_tok.get_vocab_size()
+        telemetry.log_tokenizer_info(vocab_size, reused=reused, duration=tokenizer_duration)
 
         # FASE 3: TRAINING
-        experiment_queue = ["transformer"]
-        
-        # Inizializzazione loader con i percorsi dinamici
+        model_tag = self.config.model
+        filename = f"{datetime.now().strftime('%Y%m%d_%H%M')}_{model_tag}_sub{self.config.subset if self.config.subset else 'all'}.pt"
+        model_save_path = os.path.join(self.checkpoint_dir, filename)
+
         train_loader = get_dataloader(self.jsonl_base, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
         valid_loader = get_dataloader(self.jsonl_base, "valid", self.tokenizer_path, self.config.batch_size, subset=self.config.subset // 5 if self.config.subset else None)
 
-        for model_tag in experiment_queue:
-            # Versioning immutabile con Timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-            subset_tag = f"sub{self.config.subset}" if self.config.subset else "all"
-            filename = f"{timestamp}_{model_tag}_{subset_tag}.pt"
-            model_save_path = os.path.join(self.checkpoint_dir, filename)
+        try:
+            t_train_start = time.time()
+            model = get_model_architecture(model_tag, self.device, vocab_size=vocab_size)
+            train_model(model, train_loader, valid_loader, self.config, self.device, telemetry=telemetry)
             
-            logger.info(f"\n" + "-"*60)
-            logger.info(f"TARGET: {model_tag.upper()} | OUTPUT: {filename}")
-            
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+            torch.save(model.state_dict(), model_save_path)
+            telemetry.log_phase("model_training", time.time() - t_train_start)
+
+            # FASE 4: AUTO-EVALUATION (Fast)
+            t_eval_start = time.time()
+            evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.jsonl_base, subset_size=self.eval_samples)
+            df_results = evaluator.run_all(specific_file=filename)
+            telemetry.log_phase(f"evaluation_{self.config.evaluation}", time.time() - t_eval_start)
+
+            if df_results is not None:
+                telemetry.log_final_metrics(df_results, self.config.evaluation)
+
+        except Exception as e:
+            logger.error(f"FAILURE durante il training: {e}")
+            telemetry._write_to_file(f"CRITICAL ERROR: {str(e)}\n")
+        finally:
+            telemetry.finalize()
+
+    def _execute_audit(self):
+        """Esegue l'audit (valutazione) su una selezione di checkpoint esistenti."""
+        logger.info(f"🧐 Avvio Audit Mode: {self.config.evaluation.upper()} fidelity")
+        
+        if not os.path.exists(self.checkpoint_dir):
+            logger.error(f"❌ Directory checkpoints non trovata in {self.checkpoint_dir}")
+            return
+
+        # Recupero file LIFO (Last-In, First-Out)
+        all_ckpts = sorted([f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")], reverse=True)
+        
+        if not all_ckpts:
+            logger.error("❌ Nessun checkpoint disponibile per la valutazione.")
+            return
+
+        # Selezione dei target tramite --neval
+        targets = []
+        if self.config.neval.lower() == "all":
+            targets = all_ckpts
+        else:
             try:
-                model = get_model_architecture(model_tag, self.device)
-                
-                logger.info(f"STATUS: Avvio addestramento...")
-                train_model(
-                    model=model, 
-                    train_loader=train_loader, 
-                    valid_loader=valid_loader, 
-                    config=self.config, 
-                    device=self.device
-                )
-                
-                os.makedirs(self.checkpoint_dir, exist_ok=True)
-                torch.save(model.state_dict(), model_save_path)
-                logger.info(f"SUCCESS: Modello salvato in {model_save_path}")
+                # Converte "1,2,4" in indici di lista [0, 1, 3]
+                indices = [int(i.strip()) - 1 for i in self.config.neval.split(",")]
+                targets = [all_ckpts[i] for i in indices if 0 <= i < len(all_ckpts)]
+            except (ValueError, IndexError) as e:
+                logger.error(f"❌ Errore nel formato --neval '{self.config.neval}': {e}")
+                return
 
-            except Exception as e:
-                logger.error(f"FAILURE: Errore nell'esperimento {model_tag}: {e}")
-                continue 
+        if not targets:
+            logger.warning("⚠️ Nessun checkpoint corrispondente agli indici forniti.")
+            return
 
-        logger.info("\n--- PIPELINE ESEGUITA ---")
+        logger.info(f"🔎 Modelli in esame: {targets}")
+
+        # Inizializzazione Evaluator
+        evaluator = BatchEvaluator(
+            self.device, self.tokenizer_path, self.checkpoint_dir, 
+            self.jsonl_base, subset_size=self.eval_samples
+        )
+
+        t_audit_start = time.time()
+        for ckpt in targets:
+            logger.info(f"--- Analisi: {ckpt} ---")
+            df_res = evaluator.run_all(specific_file=ckpt)
+            if df_res is not None:
+                print(f"\n{df_res.to_string(index=False)}\n")
+        
+        logger.info(f"✅ Audit completato in {time.time() - t_audit_start:.2f}s")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="C2 Orchestrator V3")
-    parser.add_argument("--subset", type=int, default=None)
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser = argparse.ArgumentParser(description="C2 Orchestrator V7 - Multitask AI Pipeline")
+    
+    # Switch principale di modalità
+    parser.add_argument("--mode", type=str, default="train", choices=["train", "eval"], 
+                        help="Scegli tra addestramento o valutazione pura")
+    
+    # Parametri Modello & Training
+    parser.add_argument("--model", type=str, choices=["transformer", "lstm_attention"], 
+                        help="Architettura (Obbligatoria solo in --mode train)")
+    parser.add_argument("--subset", type=int, default=None, help="Dimensione dataset training")
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=128)
+    
+    # Parametri Audit / Evaluation
+    parser.add_argument("--neval", type=str, default="1", 
+                        help="'all' per tutti i checkpoint, oppure indici separati da virgola (es. 1,2,4) basati su ordine cronologico inverso")
+    parser.add_argument("--evaluation", type=str, default="fast", choices=["instant", "fast", "deep"], 
+                        help="Profondità della valutazione (100, 200, 1000 campioni)")
+
+    # Flags Infrastruttura
     parser.add_argument("--force_download", action="store_true")
     parser.add_argument("--force_preprocess", action="store_true")
-    parser.add_argument("--force_train", action="store_true")
-    parser.add_argument("--skip_train", action="store_true")
+    parser.add_argument("--skip_train", action="store_true", help="Vecchio flag per compatibilità, preferire --mode eval")
     
     args = parser.parse_args()
+    
+    # Override per compatibilità se l'utente usa ancora --skip_train
+    if args.skip_train:
+        args.mode = "eval"
+
     pipeline = CodeSummarizationPipeline(args)
     pipeline.run()
 
@@ -268,7 +345,7 @@ from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 from rouge_score import rouge_scorer
 from tokenizers import Tokenizer
 
-# --- [FASE 1] NORMALIZZAZIONE PERCORSI ---
+# Risoluzione percorsi per import interni
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
@@ -276,57 +353,37 @@ if project_root not in sys.path:
 from models.factory import get_model_architecture
 from data.dataset import get_dataloader
 
-logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 class BatchEvaluator:
-    def __init__(self, subset_size=200):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        self.tokenizer_path = os.path.join(project_root, "tokenizer.json")
-        self.checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
-        self.data_path = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
-        
-        if not os.path.exists(self.tokenizer_path):
-            raise FileNotFoundError(f"❌ Tokenizer non trovato in: {self.tokenizer_path}")
-            
-        self.tokenizer = Tokenizer.from_file(self.tokenizer_path)
-        
-        # --- [CRITICO] ESTRAZIONE VOCAB_SIZE DINAMICA ---
+    def __init__(self, device, tokenizer_path, checkpoint_dir, data_path, subset_size=200):
+        self.device = device
+        self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.vocab_size = self.tokenizer.get_vocab_size()
-        logger.info(f"Detezione Vocabolario: {self.vocab_size} token.")
-        
+        self.checkpoint_dir = checkpoint_dir
+        self.data_path = data_path
+        self.tokenizer_path = tokenizer_path
         self.subset_size = subset_size
         self.results = []
-
-    def get_all_checkpoints(self):
-        if not os.path.exists(self.checkpoint_dir):
-            return []
-        return sorted([f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")])
 
     def evaluate_single_checkpoint(self, checkpoint_name):
         model_tag = "transformer" if "transformer" in checkpoint_name.lower() else "lstm_attention"
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
         
-        # 1. Caricamento Modello con Vocab_Size CORRETTO
         try:
             model = get_model_architecture(model_tag, self.device, vocab_size=self.vocab_size)
             model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
             model.eval()
         except Exception as e:
-            return {"file": checkpoint_name, "error": f"Size Mismatch o Corruzione: {str(e)}"}
+            return {"file": checkpoint_name, "error": f"Load error: {str(e)}"}
         
-        # 2. Setup Dataloader
         test_loader = get_dataloader(
             self.data_path, "test", 
             self.tokenizer_path, batch_size=1, subset=self.subset_size
         )
 
-        references = []
-        hypotheses = []
-        
-        sos_id = self.tokenizer.token_to_id("<SOS>")
-        eos_id = self.tokenizer.token_to_id("<EOS>")
+        references, hypotheses = [], []
+        sos_id, eos_id = self.tokenizer.token_to_id("<SOS>"), self.tokenizer.token_to_id("<EOS>")
 
         with torch.no_grad():
             for src, trg in tqdm(test_loader, desc=f"Valutazione {model_tag}", leave=False):
@@ -334,74 +391,43 @@ class BatchEvaluator:
                 predicted_indices = []
 
                 if model_tag == "lstm_attention":
-                    # --- LOGICA DECODING LSTM ---
                     encoder_outputs, hidden, cell = model.encoder(src)
                     input_token = torch.LongTensor([sos_id]).to(self.device)
-                    
                     for _ in range(30):
                         output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
                         top1 = output.argmax(1)
                         if top1.item() == eos_id: break
                         predicted_indices.append(top1.item())
                         input_token = top1
-                
                 else:
-                    # --- LOGICA DECODING TRANSFORMER (Autoregressiva) ---
-                    # Il Transformer ha bisogno di generare un token alla volta ricostruendo il target
                     ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(self.device)
                     for _ in range(30):
-                        out = model(src, ys) # Forward pass
+                        out = model(src, ys)
                         next_word = out[:, -1].argmax(1).item()
                         if next_word == eos_id: break
                         predicted_indices.append(next_word)
                         ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(self.device)], dim=1)
 
-                # Clean Decoding
                 pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
                 real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
-                
-                hypotheses.append(pred_text.split())
-                references.append([real_text.split()])
+                hypotheses.append(pred_text.split()); references.append([real_text.split()])
 
-        # --- CALCOLO METRICHE ---
         bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
         scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         rougeL = sum(scorer.score(" ".join(r[0]), " ".join(h))['rougeL'].fmeasure for h, r in zip(hypotheses, references)) / len(hypotheses)
         
         return {"file": checkpoint_name, "bleu": bleu, "rougeL": rougeL}
 
-    def run_all(self):
-        checkpoints = self.get_all_checkpoints()
-        if not checkpoints:
-            print(f"❌ Nessun checkpoint trovato in {self.checkpoint_dir}")
-            return
+    def run_all(self, specific_file=None):
+        files = [specific_file] if specific_file else [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
+        if not files: return None
 
-        print(f"🚀 Avvio Batch Evaluation su {len(checkpoints)} modelli...")
-        for ckpt in checkpoints:
-            print(f"🧐 Analisi di: {ckpt}")
-            metrics = self.evaluate_single_checkpoint(ckpt)
-            if "error" in metrics:
-                print(f"   ⚠️ Errore: {metrics['error']}")
-            else:
-                self.results.append(metrics)
+        print(f"\n🚀 Analisi Metriche su {len(files)} modello/i...")
+        for ckpt in sorted(files):
+            res = self.evaluate_single_checkpoint(ckpt)
+            if "error" not in res: self.results.append(res)
         
-        self.show_summary()
-
-    def show_summary(self):
-        if not self.results: return
-        df = pd.DataFrame(self.results)
-        print("\n" + "="*70)
-        print("🏆 CLASSIFICA MODELLI (Sorted by BLEU)")
-        print("="*70)
-        # Formattazione per rendere i numeri leggibili
-        df['bleu'] = df['bleu'].apply(lambda x: f"{x:.4f}")
-        df['rougeL'] = df['rougeL'].apply(lambda x: f"{x:.4f}")
-        print(df.sort_values(by="bleu", ascending=False).to_string(index=False))
-        print("="*70)
-
-if __name__ == "__main__":
-    evaluator = BatchEvaluator(subset_size=200)
-    evaluator.run_all()
+        return pd.DataFrame(self.results)
 
 ================================================================================
 
@@ -5146,20 +5172,18 @@ import math
 class PositionalEncoding(nn.Module):
     """
     Inietta informazione sull'ordine dei token.
-    Senza questo, il Transformer tratterebbe il codice Python come un set di parole a caso.
+    Senza questo, il Transformer tratterebbe il codice come un 'bag of words'.
     """
     def __init__(self, d_model, max_len=5000):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        # Calcolo dei coefficienti seno e coseno:
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
-        # x shape: [batch_size, seq_len, d_model]
         return x + self.pe[:, :x.size(1)]
 
 class Seq2SeqTransformer(nn.Module):
@@ -5176,36 +5200,45 @@ class Seq2SeqTransformer(nn.Module):
             num_decoder_layers=num_layers,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            batch_first=True # Allineamento con il tuo Dataloader
+            batch_first=True 
         )
         
         self.fc_out = nn.Linear(d_model, vocab_size)
         self.d_model = d_model
 
-    def _generate_causal_mask(self, sz):
-        """Genera una maschera triangolare superiore per impedire al decoder di guardare al futuro."""
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+    def _generate_causal_mask(self, sz, device):
+        """Impedisce al decoder di sbirciare i token futuri (Look-ahead mask)."""
+        mask = (torch.triu(torch.ones(sz, sz, device=device)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
     def forward(self, src, trg, teacher_forcing_ratio=None, **kwargs):
         """
-        NOTA: teacher_forcing_ratio è accettato per polimorfismo con l'LSTM, 
-        ma viene ignorato dal Transformer che usa il parallelismo causale.
+        Ingegneria delle Maschere:
+        1. Causal Mask: Impedisce di vedere il futuro nel target.
+        2. Padding Mask: Impedisce di dare importanza ai token <PAD> (ID 0).
         """
-        # 1. Embedding + Positional Encoding
+        # Creazione maschere di padding (True dove c'è PAD)
+        src_padding_mask = (src == 0)
+        tgt_padding_mask = (trg == 0)
+        
+        # Generazione maschera causale per il training parallelo
+        tgt_mask = self._generate_causal_mask(trg.size(1), src.device)
+        
+        # Embedding + Scaling (Standard per Transformer stability)
         src_emb = self.pos_encoder(self.embedding(src) * math.sqrt(self.d_model))
-        trg_emb = self.pos_encoder(self.embedding(trg) * math.sqrt(self.d_model))
+        tgt_emb = self.pos_encoder(self.embedding(trg) * math.sqrt(self.d_model))
         
-        # 2. Creazione della Look-ahead mask per il training parallelo
-        # Il decoder non deve 'sbirciare' i token successivi durante l'addestramento
-        trg_mask = self._generate_causal_mask(trg.size(1)).to(src.device)
-
-        # 3. Transformer Forward Pass
-        # src_key_padding_mask potrebbe essere aggiunto qui per ignorare i token <PAD>
-        output = self.transformer(src_emb, trg_emb, tgt_mask=trg_mask)
+        # Esecuzione del blocco Transformer con iniezione di tutte le maschere
+        output = self.transformer(
+            src_emb, 
+            tgt_emb, 
+            tgt_mask=tgt_mask,
+            src_key_padding_mask=src_padding_mask,
+            tgt_key_padding_mask=tgt_padding_mask,
+            memory_key_padding_mask=src_padding_mask # Il decoder ignora il padding dell'encoder
+        )
         
-        # 4. Proiezione sul vocabolario
         return self.fc_out(output)
 
 ================================================================================
@@ -5253,6 +5286,138 @@ Questa cartella conterrà gli script eseguibili per lanciare le operazioni princ
 
 ================================================================================
 
+--- FILE: log_manager.py | PATH: Project\scripts\log_manager.py ---
+-------------------------------------------------------------------
+
+import os
+import torch
+import platform
+import json
+import time
+from datetime import datetime
+
+class ExecutionLogger:
+    def __init__(self, root_dir, model_tag, subset_size=None):
+        self.start_time = datetime.now()
+        self.model_tag = model_tag
+        self.subset_size = subset_size if subset_size else "ALL"
+        
+        # Directory di salvataggio
+        self.log_dir = os.path.join(root_dir, "logs")
+        os.makedirs(self.log_dir, exist_ok=True)
+        
+        # Nome temporaneo (verrà rinominato nel finalize)
+        self.temp_name = f"exec_{self.start_time.strftime('%Y%m%d_%H%M%S')}.tmp"
+        self.file_path = os.path.join(self.log_dir, self.temp_name)
+        
+        # Struttura Dati Interna (JSON Ready)
+        self.data = {
+            "metadata": {
+                "model_type": model_tag,
+                "subset": self.subset_size,
+                "start_time": self.start_time.isoformat()
+            },
+            "durations": {}, # Fase -> "Xs"
+            "infrastructure": {},
+            "training_history": [],
+            "evaluation": {}
+        }
+
+    def log_sys_info(self):
+        """Fingerprint hardware per audit telemetrico."""
+        info = {
+            "os": platform.system(),
+            "python": platform.python_version(),
+            "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
+        }
+        if torch.cuda.is_available():
+            info["vram_total"] = f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
+            
+        self.data["infrastructure"] = info
+        self._write_to_file(f"--- INFRASTRUCTURE ---\n{json.dumps(info, indent=4)}\n")
+
+    def log_phase(self, phase_name, duration_seconds):
+        """Registra la durata di una macro-fase (es. caricamento dati)."""
+        dur_str = f"{duration_seconds:.2f}s"
+        self.data["durations"][phase_name] = dur_str
+        self._write_to_file(f"[TIMER] Phase '{phase_name}' completed in {dur_str}\n")
+
+    def log_tokenizer_info(self, vocab_size, reused=True, duration=0):
+        """Dettagli sulla pipeline del vocabolario."""
+        tok_info = {
+            "vocab_size": vocab_size,
+            "status": "REUSED" if reused else "NEWLY_TRAINED",
+            "duration": f"{duration:.2f}s"
+        }
+        self.data["metadata"]["tokenizer"] = tok_info
+        self._write_to_file(f"--- TOKENIZER ---\n{json.dumps(tok_info, indent=4)}\n")
+
+    def log_epoch(self, epoch, train_loss, val_loss, lr, epoch_duration):
+        """Log granulare per ogni epoca di addestramento."""
+        entry = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "lr": lr,
+            "duration": f"{epoch_duration:.2f}s"
+        }
+        self.data["training_history"].append(entry)
+        self._write_to_file(
+            f"Epoch {epoch:02d} | Loss: {train_loss:.4f} | Val: {val_loss:.4f} | "
+            f"LR: {lr:.6f} | Time: {epoch_duration:.2f}s\n"
+        )
+
+    def log_final_metrics(self, df_metrics, mode="fast"):
+        """Salva i risultati dell'audit post-training."""
+        metrics = df_metrics.to_dict(orient='records')[0] if df_metrics is not None and not df_metrics.empty else {}
+        metrics["eval_mode"] = mode
+        self.data["evaluation"] = metrics
+        self._write_to_file(f"\n--- FINAL EVALUATION ({mode.upper()}) ---\n{json.dumps(metrics, indent=4)}\n")
+
+    def finalize(self):
+        """Rinomina il file con prefisso cronologico ISO 8601 per ordinamento LIFO."""
+        end_time = datetime.now()
+        total_duration = end_time - self.start_time
+        self.data["durations"]["total_execution"] = str(total_duration)
+        
+        # Estrazione Metriche per lo Slug
+        bleu = self.data["evaluation"].get("bleu", 0)
+        # Se il BLEU è quasi zero o assente, usiamo NA
+        bleu_tag = f"B{bleu:.2f}" if bleu > 0.0001 else "NA"
+        
+        # Naming Slug: 20260125_143022_TRANS_S50000_B0.25
+        full_ts = self.start_time.strftime('%Y%m%d_%H%M%S')
+        model_short = self.model_tag.upper()[:5]
+        subset_tag = f"S{self.subset_size}"
+        
+        final_name = f"{full_ts}_{model_short}_{subset_tag}_{bleu_tag}"
+        
+        final_path_log = os.path.join(self.log_dir, f"{final_name}.log")
+        final_path_json = os.path.join(self.log_dir, f"{final_name}.json")
+
+        # Scrittura finale riassuntiva
+        self._write_to_file(f"\n--- ALL PHASE DURATIONS ---\n{json.dumps(self.data['durations'], indent=4)}\n")
+        self._write_to_file(f"\n--- FINISHED ---\nTotal Duration: {total_duration}\n")
+        
+        try:
+            # Chiusura e rinomina (Atomic Move)
+            if os.path.exists(self.file_path):
+                os.rename(self.file_path, final_path_log)
+            
+            # Export dei metadati in JSON per analisi future (es. grafici)
+            with open(final_path_json, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=4)
+                
+            print(f"✅ Log Archiviato: {os.path.basename(final_path_log)}")
+        except Exception as e:
+            print(f"⚠️ Errore critico in fase di archiviazione log: {e}")
+
+    def _write_to_file(self, text):
+        with open(self.file_path, "a", encoding="utf-8") as f:
+            f.write(text)
+
+================================================================================
+
 --- FILE: train.py | PATH: Project\scripts\train.py ---
 -------------------------------------------------------
 
@@ -5260,27 +5425,38 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import logging
+import time # Indispensabile per il profiling
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
-def train_model(model, train_loader, valid_loader, config, device):
-    # --- FASE 0: AUDIT HARDWARE & MODELLO ---
+def train_model(model, train_loader, valid_loader, config, device, telemetry=None):
+    # --- [FASE 0] AUDIT HARDWARE ---
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"🚀 TRAINING START | Params: {total_params:,} | Device: {device}")
 
-    # Inizializzazione con L2 Regularization (Weight Decay)
-    # Il weight_decay forza i pesi piccoli, rendendo difficile la memorizzazione esatta.
-    criterion = nn.CrossEntropyLoss(ignore_index=0)
-    optimizer = optim.Adam(model.parameters(), lr=0.0005, weight_decay=1e-5)
-    
-    # Scheduler: Riduce la LR se la Val Loss smette di scendere (Punto di sella)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1)
+    steps_per_epoch = len(train_loader)
+    if steps_per_epoch == 0:
+        raise ValueError("❌ Il train_loader è vuoto.")
+
+    criterion = nn.CrossEntropyLoss(ignore_index=0, label_smoothing=0.1)
+    optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.01)
+
+    # Configurazione OneCycleLR con protezione per piccoli subset
+    total_steps = config.epochs * steps_per_epoch
+    if total_steps < 2:
+        scheduler = None
+    else:
+        scheduler = optim.lr_scheduler.OneCycleLR(
+            optimizer, max_lr=0.0005, steps_per_epoch=steps_per_epoch, 
+            epochs=config.epochs, pct_start=0.3
+        )
     
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
     best_valid_loss = float('inf')
 
     for epoch in range(config.epochs):
+        epoch_start_time = time.time() # ⏱️ START TIMER EPOCA
         model.train()
         train_loss = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.epochs}")
@@ -5290,7 +5466,6 @@ def train_model(model, train_loader, valid_loader, config, device):
             optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                # Ridurre gradualmente il teacher forcing durante le epoche
                 tf_ratio = max(0.2, 0.5 - (epoch * 0.1)) 
                 output = model(src, trg, teacher_forcing_ratio=tf_ratio)
                 output_dim = output.shape[-1]
@@ -5307,14 +5482,29 @@ def train_model(model, train_loader, valid_loader, config, device):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
-            train_loss += loss.item()
-            pbar.set_postfix(loss=f"{loss.item():.4f}")
+            if scheduler:
+                scheduler.step()
 
-        # Validazione e Scheduling
+            train_loss += loss.item()
+            current_lr = optimizer.param_groups[0]['lr']
+            pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{current_lr:.6f}")
+
+        # --- FINE EPOCA: CALCOLO METRICHE E TEMPI ---
+        epoch_duration = time.time() - epoch_start_time # ⏱️ STOP TIMER EPOCA
+        avg_train_loss = train_loss / steps_per_epoch
         valid_loss = evaluate_validation(model, valid_loader, criterion, device)
-        scheduler.step(valid_loss) # Adattamento dinamico della LR
         
-        status_msg = f"Epoch {epoch+1} | Train Loss: {train_loss/len(train_loader):.4f} | Val Loss: {valid_loss:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}"
+        # --- [TELEMETRIA] Chiamata aggiornata con epoch_duration ---
+        if telemetry:
+            telemetry.log_epoch(
+                epoch=epoch + 1, 
+                train_loss=avg_train_loss, 
+                val_loss=valid_loss, 
+                lr=current_lr, 
+                epoch_duration=epoch_duration # Il parametro mancante
+            )
+        
+        status_msg = f"Epoch {epoch+1} | Loss: {avg_train_loss:.4f} | Val: {valid_loss:.4f} | Time: {epoch_duration:.2f}s"
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
             status_msg += " 🔥 [NEW BEST]"
@@ -5324,15 +5514,17 @@ def train_model(model, train_loader, valid_loader, config, device):
 def evaluate_validation(model, loader, criterion, device):
     model.eval()
     epoch_loss = 0
+    num_batches = len(loader)
+    if num_batches == 0: return 0
     with torch.no_grad():
         for src, trg in loader:
             src, trg = src.to(device), trg.to(device)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                output = model(src, trg, teacher_forcing_ratio=0) # Zero TF in validazione
+                output = model(src, trg, teacher_forcing_ratio=0)
                 output_dim = output.shape[-1]
                 loss = criterion(output[:, 1:].reshape(-1, output_dim), trg[:, 1:].reshape(-1))
                 epoch_loss += loss.item()
-    return epoch_loss / len(loader)
+    return epoch_loss / num_batches
 
 ================================================================================
 

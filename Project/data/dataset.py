@@ -7,34 +7,31 @@ import os
 import glob
 import re
 import hashlib
+import multiprocessing
 from tokenizers import Tokenizer
 
-# --- [FASE 1] DATA SANITIZATION (GIGO Principle) ---
+# --- [FASE 1] DATA SANITIZATION (Principio GIGO: Garbage In, Garbage Out) TEST MARCO---
 def clean_docstring(doc):
-    """Estrae l'essenza (Headline) della docstring rimuovendo il boilerplate tecnico."""
+    """Estrae l'essenza della docstring rimuovendo il rumore tecnico."""
     if not doc: return ""
-    # 1. Prendiamo solo la prima riga (Headline)
     first_line = doc.split('\n\n')[0].split('\n')[0]
-    # 2. Pulizia tag tecnici (Sphinx/Google style)
     clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
-    # 3. Rimozione residui di doctest
     clean = re.sub(r'>>>.*', '', clean)
     return clean.strip()
 
 def compute_content_hash(code, doc):
-    """Genera un fingerprint per la deduplicazione deterministica."""
-    # Normalizzazione per evitare che spazi diversi creino hash diversi
+    """Fingerprint deterministico per la deduplicazione."""
     normalized = (re.sub(r'\s+', '', code) + doc).encode('utf-8')
     return hashlib.sha256(normalized).hexdigest()
 
-# --- [FASE 2] SERIALIZABLE COLLATOR (Windows/Linux Agnostic) ---
+# --- [FASE 2] OPTIMIZED COLLATOR ---
 class SmartCollator:
     def __init__(self, pad_id):
         self.pad_id = pad_id
 
     def __call__(self, batch):
         code_seqs, doc_seqs = zip(*batch)
-        # Il padding viene fatto al valore massimo del BATCH corrente (efficienza)
+        # Il padding dinamico al batch_max ottimizza la memoria rispetto al padding statico
         code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=self.pad_id)
         doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=self.pad_id)
         return code_padded, doc_padded
@@ -52,9 +49,9 @@ class CodeSummaryDataset(Dataset):
         files = glob.glob(search_pattern)
         
         if not files:
-            raise FileNotFoundError(f"❌ Nessun file trovato in {search_pattern}")
+            raise FileNotFoundError(f"❌ Sorgente dati non trovata: {search_pattern}")
 
-        print(f"🔍 [AUDIT {split_type.upper()}] Caricamento asimmetrico in corso...")
+        print(f"🔍 [IO_AUDIT] Caricamento '{split_type}' in corso...")
 
         for file_path in files:
             with gzip.open(file_path, 'rt', encoding='utf-8') as f:
@@ -66,8 +63,7 @@ class CodeSummaryDataset(Dataset):
                         
                         clean_doc = clean_docstring(doc)
                         
-                        # FILTRI DI QUALITÀ (Review: 10 parole < codice < 200 parole)
-                        # Il codice viene tagliato a 256 token, quindi carichiamo campioni ragionevoli
+                        # Filtro di Qualità R&D
                         if len(clean_doc) > 10 and 10 < len(code.split()) < 250:
                             f_hash = compute_content_hash(code, clean_doc)
                             if f_hash not in self.seen_hashes:
@@ -78,7 +74,7 @@ class CodeSummaryDataset(Dataset):
                     except: continue
                 if subset and len(self.data) >= subset: break
         
-        print(f"✅ {split_type.upper()} pronto: {len(self.data)} campioni univoci.")
+        print(f"✅ Set '{split_type}' pronto: {len(self.data)} campioni univoci.")
         
         self.pad_id = self.tokenizer.token_to_id("<PAD>")
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
@@ -89,8 +85,7 @@ class CodeSummaryDataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.data[idx]
-        
-        # Encoding asimmetrico: più spazio al codice, meno al riassunto
+        # Tokenizzazione asimmetrica
         c_tokens = self.tokenizer.encode(item['code']).ids
         code_ids = [self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id]
         
@@ -99,9 +94,8 @@ class CodeSummaryDataset(Dataset):
         
         return torch.tensor(code_ids), torch.tensor(doc_ids)
 
-# --- [FASE 4] DATALOADER FACTORY ---
+# --- [FASE 4] HIGH-THROUGHPUT FACTORY ---
 def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
-    # Passiamo le lunghezze asimmetriche al dataset
     dataset = CodeSummaryDataset(
         data_dir, split_type, tokenizer_path, 
         max_len_code=256, 
@@ -111,16 +105,19 @@ def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=
     
     collator = SmartCollator(dataset.pad_id)
     
-    # Adaptive Multiprocessing
-    is_windows = os.name == 'nt'
-    workers = 0 if (is_windows or (subset and subset < 100)) else 2
-
+    # --- LOGICA DI SBLOCCO GPU (Mental Model: Parallel Prefetching) ---
+    # Non usiamo più workers=0 su Windows. Forza l'uso della CPU per preparare i dati.
+    # Regola empirica: num_workers = num_cores_cpu / 2
+    cpu_count = multiprocessing.cpu_count()
+    workers = min(cpu_count, 4) if torch.cuda.is_available() else 0
+    
     return DataLoader(
         dataset, 
         batch_size=batch_size, 
         shuffle=shuffle, 
         collate_fn=collator,
-        num_workers=workers,
-        pin_memory=True if torch.cuda.is_available() else False,
-        prefetch_factor=2 if workers > 0 else None
+        num_workers=workers,           # Sblocca il caricamento parallelo
+        pin_memory=True,                # Accelera il trasferimento RAM -> VRAM
+        prefetch_factor=2 if workers > 0 else None, # Pre-carica i batch successivi
+        persistent_workers=True if workers > 0 else False # Mantiene i worker vivi tra le epoche
     )
