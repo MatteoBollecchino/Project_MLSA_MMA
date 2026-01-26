@@ -11,7 +11,7 @@ import multiprocessing
 from tqdm import tqdm
 from tokenizers import Tokenizer
 
-# --- [FASE 1] DATA SANITIZATION & INTEGRITY (Principio GIGO) ---
+# --- [PHASE 1] DATA SANITIZATION & INTEGRITY (Principio GIGO) ---
 
 def clean_docstring(doc):
     """
@@ -42,7 +42,7 @@ def compute_content_hash(code, doc):
     return hashlib.sha256(normalized).hexdigest()
 
 
-# --- [FASE 2] OPTIMIZED COLLATOR (Dynamic Padding) ---
+# --- [PHASE 2] OPTIMIZED COLLATOR (Dynamic Padding) ---
 
 class SmartCollator:
     """
@@ -64,7 +64,7 @@ class SmartCollator:
         return code_padded, doc_padded
 
 
-# --- [FASE 3] ASYMMETRIC CACHING ENGINE (Dataset Core) ---
+# --- [PHASE 3] ASYMMETRIC CACHING ENGINE (Dataset Core) ---
 
 class CodeSummaryDataset(Dataset):
     """
@@ -95,9 +95,10 @@ class CodeSummaryDataset(Dataset):
                 for line in f:
                     try:
                         item = json.loads(line)
+                        #Try different keys to access each field to accomodate for many versions of dataset
                         code = item.get('code', item.get('func_code_string', ''))
                         doc = item.get('docstring', item.get('func_documentation_string', ''))
-                        
+                        #Clears doc from quotation marks and other characters
                         clean_doc = clean_docstring(doc)
                         
                         # Quality Filter: exclude fragments that are too short or too long

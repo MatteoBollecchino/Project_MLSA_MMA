@@ -1,0 +1,88 @@
+{
+    "metadata": {
+        "model_type": "transformer",
+        "subset": 50000,
+        "start_time": "2026-01-25T15:27:27.421446",
+        "tokenizer": {
+            "vocab_size": 20000,
+            "status": "NEWLY_TRAINED",
+            "duration": "34.37s"
+        }
+    },
+    "durations": {
+        "data_infrastructure": "0.01s",
+        "total_execution": "5:48:14.913059"
+    },
+    "infrastructure": {
+        "os": "Windows",
+        "python": "3.13.3",
+        "device": "NVIDIA GeForce RTX 3060 Laptop GPU",
+        "vram_total": "6.44 GB"
+    },
+    "training_history": [
+        {
+            "epoch": 1,
+            "train_loss": 6.262831023282103,
+            "val_loss": 4.796480492700504,
+            "lr": 3.4481916809580074e-05,
+            "duration": "1900.26s"
+        },
+        {
+            "epoch": 2,
+            "train_loss": 3.78953643040279,
+            "val_loss": 3.1850631116311763,
+            "lr": 7.617995128432351e-05,
+            "duration": "1875.10s"
+        },
+        {
+            "epoch": 3,
+            "train_loss": 2.4009667753868396,
+            "val_loss": 2.185621321955814,
+            "lr": 0.00014006187453767847,
+            "duration": "1890.78s"
+        },
+        {
+            "epoch": 4,
+            "train_loss": 1.6530647805279783,
+            "val_loss": 1.7181737498392033,
+            "lr": 0.00021841824741805274,
+            "duration": "3725.13s"
+        },
+        {
+            "epoch": 5,
+            "train_loss": 1.4197064421670822,
+            "val_loss": 1.5766419157197205,
+            "lr": 0.0003017928159791628,
+            "duration": "1903.47s"
+        },
+        {
+            "epoch": 6,
+            "train_loss": 1.3667250277136294,
+            "val_loss": 1.5303220794170718,
+            "lr": 0.0003801237171715369,
+            "duration": "1893.35s"
+        },
+        {
+            "epoch": 7,
+            "train_loss": 1.3562693101975618,
+            "val_loss": 1.5590559968465492,
+            "lr": 0.00044395777103944657,
+            "duration": "1892.24s"
+        },
+        {
+            "epoch": 8,
+            "train_loss": 1.3540561693098845,
+            "val_loss": 1.4958930030653748,
+            "lr": 0.00048559131543511434,
+            "duration": "1896.83s"
+        },
+        {
+            "epoch": 9,
+            "train_loss": 1.3367019553318658,
+            "val_loss": 1.487896637071537,
+            "lr": 0.0004999999817014823,
+            "duration": "2273.81s"
+        }
+    ],
+    "evaluation": {}
+}

@@ -1,0 +1,32 @@
+--- INFRASTRUCTURE ---
+{
+    "os": "Windows",
+    "python": "3.13.3",
+    "device": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "vram_total": "6.44 GB"
+}
+[TIMER] Phase 'data_infrastructure' completed in 0.01s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "NEWLY_TRAINED",
+    "duration": "34.37s"
+}
+Epoch 01 | Loss: 6.2628 | Val: 4.7965 | LR: 0.000034 | Time: 1900.26s
+Epoch 02 | Loss: 3.7895 | Val: 3.1851 | LR: 0.000076 | Time: 1875.10s
+Epoch 03 | Loss: 2.4010 | Val: 2.1856 | LR: 0.000140 | Time: 1890.78s
+Epoch 04 | Loss: 1.6531 | Val: 1.7182 | LR: 0.000218 | Time: 3725.13s
+Epoch 05 | Loss: 1.4197 | Val: 1.5766 | LR: 0.000302 | Time: 1903.47s
+Epoch 06 | Loss: 1.3667 | Val: 1.5303 | LR: 0.000380 | Time: 1893.35s
+Epoch 07 | Loss: 1.3563 | Val: 1.5591 | LR: 0.000444 | Time: 1892.24s
+Epoch 08 | Loss: 1.3541 | Val: 1.4959 | LR: 0.000486 | Time: 1896.83s
+Epoch 09 | Loss: 1.3367 | Val: 1.4879 | LR: 0.000500 | Time: 2273.81s
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "0.01s",
+    "total_execution": "5:48:14.913059"
+}
+
+--- FINISHED ---
+Total Duration: 5:48:14.913059

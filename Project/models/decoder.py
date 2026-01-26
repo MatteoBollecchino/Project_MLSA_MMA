@@ -37,7 +37,7 @@ class Decoder(nn.Module):
         a = self.attention(hidden[-1], encoder_outputs).unsqueeze(1)
         # Dot product to obtain the context vector: [batch_size, 1, hid_dim]
         weighted = torch.bmm(a, encoder_outputs)
-        
+        #Concatenate embedded token with context vector on dim 2
         rnn_input = torch.cat((embedded, weighted), dim=2)
         output, (hidden, cell) = self.rnn(rnn_input, (hidden, cell))
         
