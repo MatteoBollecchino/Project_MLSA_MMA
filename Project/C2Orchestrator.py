@@ -216,7 +216,7 @@ if __name__ == "__main__":
     parser.add_argument("--neval", type=str, default="1", 
                         help="'all' for all checkpoints, or comma-separated indices (e.g., 1,2,4) based on reverse chronological order")
     
-    # When running, set to 'instant'
+    # Evaluation depth parameter
     parser.add_argument("--evaluation", type=str, default="fast", choices=["instant", "fast", "deep"], 
                         help="Depth of evaluation (100, 200, 1000 samples)")
 
