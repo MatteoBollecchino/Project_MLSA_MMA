@@ -6,6 +6,7 @@ import os
 import glob
 import random
 import sys
+import math
 from tokenizers import Tokenizer
 
 # --- [FASE 1] NORMALIZZAZIONE DETERMINISTICA ---
@@ -15,137 +16,126 @@ if project_root not in sys.path:
 
 from models.factory import get_model_architecture
 
-# --- LOGICA DI DECODIFICA AVANZATA ---
-def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, temp=1.2):
-    device = src_tensor.device
+def clean_prediction(text):
+    """Rimuove artefatti BPE e normalizza la spaziatura."""
+    return text.replace('Ġ', ' ').replace('  ', ' ').strip()
+
+# --- LOGICA DI DECODIFICA UNIVERSALE ---
+def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=30, device="cpu"):
+    model.eval()
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
-
-    # Nota: Questa logica assume un'architettura LSTM/RNN. 
-    # Per il Transformer la logica di beam search differisce (niente hidden/cell).
+    
     with torch.no_grad():
-        encoder_outputs, hidden, cell = model.encoder(src_tensor)
-
-    beams = [(0.0, [sos_id], hidden, cell)]
-
-    for _ in range(max_len):
-        candidates = []
-        for log_prob, tokens, h, c in beams:
-            if tokens[-1] == eos_id:
-                candidates.append((log_prob, tokens, h, c))
-                continue
-
-            input_token = torch.LongTensor([tokens[-1]]).to(device)
-            with torch.no_grad():
-                output, h_next, c_next = model.decoder(input_token, h, c, encoder_outputs)
-            
-            probs = F.log_softmax(output / temp, dim=1)
-            topk_probs, topk_ids = probs.topk(beam_width)
-
-            for i in range(beam_width):
-                next_log_prob = log_prob + topk_probs[0][i].item()
-                next_tokens = tokens + [topk_ids[0][i].item()]
-                candidates.append((next_log_prob, next_tokens, h_next, c_next))
-
-        beams = sorted(candidates, key=lambda x: x[0], reverse=True)[:beam_width]
-        if all(b[1][-1] == eos_id for b in beams):
-            break
-
-    return beams[0][1]
+        if model_tag == "lstm_attention":
+            # Decoding per LSTM
+            encoder_outputs, hidden, cell = model.encoder(src_tensor)
+            input_token = torch.LongTensor([sos_id]).to(device)
+            predicted_indices = []
+            for _ in range(max_len):
+                output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+                top1 = output.argmax(1)
+                if top1.item() == eos_id: break
+                predicted_indices.append(top1.item())
+                input_token = top1
+            return predicted_indices
+        
+        else:
+            # Decoding per Transformer
+            # Il Transformer richiede la generazione sequenziale del target
+            ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(device)
+            predicted_indices = []
+            for _ in range(max_len):
+                out = model(src_tensor, ys)
+                # Prendiamo l'ultimo logit della sequenza prodotta
+                next_word = out[:, -1].argmax(1).item()
+                if next_word == eos_id: break
+                predicted_indices.append(next_word)
+                ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(device)], dim=1)
+            return predicted_indices
 
 # --- DATA LOADING ---
-def load_random_samples(data_dir, split, num_samples=2):
+def load_random_samples(data_dir, split, num_samples=10):
     search_pattern = os.path.join(data_dir, split, "*.jsonl.gz")
     files = glob.glob(search_pattern)
     if not files: return []
     
     samples = []
-    try:
-        with gzip.open(random.choice(files), 'rt', encoding='utf-8') as f:
-            lines = f.readlines()
-            chosen = random.sample(lines, min(num_samples, len(lines)))
-            for c in chosen:
-                item = json.loads(c)
-                samples.append({
-                    'code': item.get('code', item.get('func_code_string', '')),
-                    'doc': item.get('docstring', item.get('func_documentation_string', ''))
-                })
-    except: pass
-    return samples
+    # Mescoliamo i file per non prendere sempre lo stesso chunk
+    random.shuffle(files)
+    for file_path in files:
+        try:
+            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                lines = f.readlines()
+                chosen = random.sample(lines, min(num_samples - len(samples), len(lines)))
+                for c in chosen:
+                    item = json.loads(c)
+                    samples.append({
+                        'code': item.get('code', item.get('func_code_string', '')),
+                        'doc': item.get('docstring', item.get('func_documentation_string', ''))
+                    })
+            if len(samples) >= num_samples: break
+        except: continue
+    return samples[:num_samples]
 
 # --- CORE AUDIT ENGINE ---
 def run_deep_audit():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
     tokenizer_path = os.path.join(project_root, "tokenizer.json")
     checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
     data_root = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
 
-    if not os.path.exists(tokenizer_path):
-        print(f"❌ Tokenizer non trovato in: {tokenizer_path}")
-        return
-
-    # --- [FASE 2] ESTRAZIONE DINAMICA VOCAB ---
     tokenizer = Tokenizer.from_file(tokenizer_path)
-    current_vocab_size = tokenizer.get_vocab_size()
-    print(f"💡 Vocabolario rilevato: {current_vocab_size} token")
+    vocab_size = tokenizer.get_vocab_size()
     
-    if not os.path.exists(checkpoint_dir):
-        print(f"❌ Directory checkpoints non trovata: {checkpoint_dir}")
-        return
-        
-    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
-    if not checkpoints:
-        print("❌ Nessun file .pt trovato.")
-        return
-
+    # Suite 10-10-10
     suites = {
-        "TRAIN (Memorization)": load_random_samples(data_root, "train", 2),
-        "TEST (Generalization)": load_random_samples(data_root, "test", 2),
-        "CUSTOM (Injection)": [
-            {"code": "def power(a, b): return a ** b", "doc": "Calculates power of a number."},
-            {"code": "def check_empty(l): return len(l) == 0", "doc": "Checks if list is empty."}
+        "TRAIN (Memorization Check)": load_random_samples(data_root, "train", 10),
+        "TEST (Generalization Check)": load_random_samples(data_root, "test", 10),
+        "CUSTOM (Zero-Shot Logic)": [
+            {"code": "def add(a, b): return a + b", "doc": "Adds two numbers."},
+            {"code": "def sub(a, b): return a - b", "doc": "Subtracts b from a."},
+            {"code": "def mul(a, b): return a * b", "doc": "Multiplies two factors."},
+            {"code": "def power(a, b): return a ** b", "doc": "Calculates exponentiation."},
+            {"code": "def is_even(n): return n % 2 == 0", "doc": "Checks if a number is even."},
+            {"code": "def get_len(x): return len(x)", "doc": "Returns the length of an object."},
+            {"code": "def reverse_list(l): return l[::-1]", "doc": "Reverses a list."},
+            {"code": "def to_upper(s): return s.upper()", "doc": "Converts string to uppercase."},
+            {"code": "def check_none(obj): return obj is None", "doc": "Verifies if object is None."},
+            {"code": "def find_max(l): return max(l)", "doc": "Finds the maximum value."}
         ]
     }
 
-    print(f"\n{'='*80}\n🚀 STARTING BATCH AUDIT | DEVICE: {device}\n{'='*80}")
+    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
+    
+    print(f"\n{'='*90}\n🚀 BATCH AUDIT ENGINE | VOCAB: {vocab_size} | DEVICE: {device}\n{'='*90}")
 
     for ckpt_name in sorted(checkpoints):
-        print(f"\n🔍 ANALYZING CHECKPOINT: {ckpt_name}")
+        print(f"\n🔍 TARGET: {ckpt_name}")
         model_tag = "transformer" if "transformer" in ckpt_name.lower() else "lstm_attention"
         
         try:
-            # Passiamo esplicitamente vocab_size per evitare mismatch
-            model = get_model_architecture(model_tag, device, vocab_size=current_vocab_size)
-            ckpt_path = os.path.join(checkpoint_dir, ckpt_name)
-            
-            # Caricamento pesi
-            state_dict = torch.load(ckpt_path, map_location=device)
-            model.load_state_dict(state_dict)
+            model = get_model_architecture(model_tag, device, vocab_size=vocab_size)
+            model.load_state_dict(torch.load(os.path.join(checkpoint_dir, ckpt_name), map_location=device))
             model.eval()
 
             for suite_name, samples in suites.items():
-                print(f"\n   >>> SUITE: {suite_name}")
+                print(f"\n--- SUITE: {suite_name} ---")
                 for i, s in enumerate(samples):
                     encoded = tokenizer.encode(s['code']).ids
-                    # Nota: Assicurati che 1 e 2 siano SOS e EOS nel tuo tokenizer
                     src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
                     
-                    # Decoding con Beam Search (solo per LSTM)
-                    if model_tag == "lstm_attention":
-                        ids = beam_search_decode(model, src_tensor, tokenizer)
-                    else:
-                        # Logica di decoding base per Transformer (da implementare se necessario)
-                        ids = [1] # Placeholder
-                        
-                    prediction = tokenizer.decode(ids, skip_special_tokens=True).strip()
+                    ids = autoregressive_decode(model, src_tensor, tokenizer, model_tag, device=device)
+                    prediction = clean_prediction(tokenizer.decode(ids, skip_special_tokens=True))
                     
-                    print(f"    SAMPLE #{i+1} | CODE: {s['code'].strip()[:50].replace('\\n', ' ')}...")
-                    print(f"    REAL: {s['doc'][:60].strip()}...")
-                    print(f"    PRED: {prediction}")
-                    print(f"    {'-'*20}")
+                    # Formattazione scannable
+                    code_snippet = s['code'].replace('\n', ' ')[:40]
+                    print(f"[{i+1}/10] CODE: {code_snippet}...")
+                    print(f"      REAL: {s['doc'][:60]}")
+                    print(f"      PRED: {prediction}")
+                    print(f"      {'-'*15}")
         except Exception as e:
-            print(f"    ❌ Critical Error su {ckpt_name}: {e}")
+            print(f"⚠️ Errore su {ckpt_name}: {e}")
 
 if __name__ == "__main__":
     run_deep_audit()
