@@ -1,0 +1,66 @@
+{
+    "metadata": {
+        "model_type": "lstm_attention",
+        "subset": 500,
+        "start_time": "2026-01-26T11:00:39.769268",
+        "tokenizer": {
+            "vocab_size": 20000,
+            "status": "REUSED",
+            "duration": "0.00s"
+        }
+    },
+    "durations": {
+        "data_infrastructure": "0.06s",
+        "model_training": "1243.63s",
+        "evaluation_instant": "27.95s",
+        "total_execution": "0:21:12.512502"
+    },
+    "infrastructure": {
+        "os": "Windows",
+        "python": "3.11.1",
+        "device": "cpu"
+    },
+    "training_history": [
+        {
+            "epoch": 1,
+            "train_loss": 9.943223118782043,
+            "val_loss": 9.859532833099365,
+            "lr": 0.0004171665761468684,
+            "duration": "187.54s"
+        },
+        {
+            "epoch": 2,
+            "train_loss": 8.463439166545868,
+            "val_loss": 8.28649616241455,
+            "lr": 0.0004616812030828718,
+            "duration": "189.38s"
+        },
+        {
+            "epoch": 3,
+            "train_loss": 6.458441376686096,
+            "val_loss": 8.681222915649414,
+            "lr": 0.0002779920070613508,
+            "duration": "203.34s"
+        },
+        {
+            "epoch": 4,
+            "train_loss": 6.267770051956177,
+            "val_loss": 8.339115142822266,
+            "lr": 7.322501181014432e-05,
+            "duration": "270.82s"
+        },
+        {
+            "epoch": 5,
+            "train_loss": 6.168527841567993,
+            "val_loss": 8.304302215576172,
+            "lr": 1.5739412388992699e-06,
+            "duration": "275.74s"
+        }
+    ],
+    "evaluation": {
+        "file": "20260126_1100_lstm_attention_sub500.pt",
+        "bleu": 0.0016144666153375946,
+        "rougeL": 0.10716758464386006,
+        "eval_mode": "instant"
+    }
+}

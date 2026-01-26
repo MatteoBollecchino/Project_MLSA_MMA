@@ -1,0 +1,39 @@
+--- INFRASTRUCTURE ---
+{
+    "os": "Windows",
+    "python": "3.11.1",
+    "device": "cpu"
+}
+[TIMER] Phase 'data_infrastructure' completed in 0.06s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "REUSED",
+    "duration": "0.00s"
+}
+Epoch 01 | Loss: 9.9432 | Val: 9.8595 | LR: 0.000417 | Time: 187.54s
+Epoch 02 | Loss: 8.4634 | Val: 8.2865 | LR: 0.000462 | Time: 189.38s
+Epoch 03 | Loss: 6.4584 | Val: 8.6812 | LR: 0.000278 | Time: 203.34s
+Epoch 04 | Loss: 6.2678 | Val: 8.3391 | LR: 0.000073 | Time: 270.82s
+Epoch 05 | Loss: 6.1685 | Val: 8.3043 | LR: 0.000002 | Time: 275.74s
+[TIMER] Phase 'model_training' completed in 1243.63s
+[TIMER] Phase 'evaluation_instant' completed in 27.95s
+
+--- FINAL EVALUATION (INSTANT) ---
+{
+    "file": "20260126_1100_lstm_attention_sub500.pt",
+    "bleu": 0.0016144666153375946,
+    "rougeL": 0.10716758464386006,
+    "eval_mode": "instant"
+}
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "0.06s",
+    "model_training": "1243.63s",
+    "evaluation_instant": "27.95s",
+    "total_execution": "0:21:12.512502"
+}
+
+--- FINISHED ---
+Total Duration: 0:21:12.512502
