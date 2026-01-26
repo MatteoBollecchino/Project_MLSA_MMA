@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # --- [MASTER PIPELINE CLASS] ---
 class CodeSummarizationPipeline:
+    """ Pipeline orchestrator for code summarization tasks. """
 
     # Initialization of configuration of the pipeline
     def __init__(self, config):
@@ -46,6 +47,8 @@ class CodeSummarizationPipeline:
 
     # Execution of the pipeline
     def run(self):
+        """ Main execution method of the pipeline. """
+
         logger.info(f"--- MASTER PIPELINE START | Mode: {self.config.mode.upper()} ---")
         
         # Mode-based execution
@@ -59,8 +62,8 @@ class CodeSummarizationPipeline:
 
     # Execution of the training pipeline
     def _execute_training(self):
-        """Manages the entire training and telemetry pipeline."""
-        
+        """ Manages the entire training and telemetry pipeline. """
+
         # Initialization of telemetry specific to training
         telemetry = ExecutionLogger(self.root, self.config.model, self.config.subset)
         telemetry.log_sys_info()
@@ -113,16 +116,20 @@ class CodeSummarizationPipeline:
             model = get_model_architecture(model_tag, self.device, vocab_size=vocab_size)
             train_model(model, train_loader, valid_loader, self.config, self.device, telemetry=telemetry)
             
+            # Save the trained model
             os.makedirs(self.checkpoint_dir, exist_ok=True)
             torch.save(model.state_dict(), model_save_path)
             telemetry.log_phase("model_training", time.time() - t_train_start)
 
             # PHASE 4: AUTO-EVALUATION (Fast)
             t_eval_start = time.time()
+
+            # Initialize evaluator and run evaluation
             evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.jsonl_base, subset_size=self.eval_samples)
             df_results = evaluator.run_all(specific_file=filename)
             telemetry.log_phase(f"evaluation_{self.config.evaluation}", time.time() - t_eval_start)
-
+            
+            # Log final metrics if available
             if df_results is not None:
                 telemetry.log_final_metrics(df_results, self.config.evaluation)
 
@@ -134,9 +141,11 @@ class CodeSummarizationPipeline:
 
     # Execution of the audit pipeline
     def _execute_audit(self):
-        """Executes the audit (evaluation) on a selection of existing checkpoints."""
+        """ Executes the audit (evaluation) on a selection of existing checkpoints."""
+
         logger.info(f"🧐 Starting Audit Mode: {self.config.evaluation.upper()} fidelity")
         
+        # Checkpoint directory validation
         if not os.path.exists(self.checkpoint_dir):
             logger.error(f"❌ Checkpoint directory not found at {self.checkpoint_dir}")
             return
@@ -174,9 +183,14 @@ class CodeSummarizationPipeline:
         )
 
         t_audit_start = time.time()
+
+        # Running evaluation on each selected checkpoint
         for ckpt in targets:
             logger.info(f"--- Analysis: {ckpt} ---")
+
+            # Execute evaluation
             df_res = evaluator.run_all(specific_file=ckpt)
+
             if df_res is not None:
                 print(f"\n{df_res.to_string(index=False)}\n")
         

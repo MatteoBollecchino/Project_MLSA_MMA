@@ -7,6 +7,7 @@ from datetime import datetime
 
 # --- [LOGGING AND TELEMETRY MANAGER] ---
 class ExecutionLogger:
+    """ Manages detailed logging and telemetry for model training and evaluation. """
 
     # Initialization of the logger
     def __init__(self, root_dir, model_tag, subset_size=None):
