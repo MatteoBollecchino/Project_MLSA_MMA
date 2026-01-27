@@ -17,6 +17,7 @@ if project_root not in sys.path:
 
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 from models.factory import get_model_architecture
 
 def clean_output(text):
@@ -36,11 +37,20 @@ def clean_prediction(text):
     return text.replace('Ġ', ' ').replace('  ', ' ').strip()
 
 >>>>>>> Stashed changes
+=======
+def clean_prediction(text):
+    """Removes BPE artifacts and normalizes spacing."""
+    return text.replace('Ġ', ' ').replace('  ', ' ').strip()
+
+>>>>>>> Stashed changes
 # --- UNIVERSAL DECODING LOGIC ---
 def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=30, device="cpu"):
     """ Performs autoregressive decoding given a model and source tensor. """
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
@@ -52,6 +62,10 @@ def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=30, d
         if model_tag == "lstm_attention":
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+            # Decoding for LSTM
+>>>>>>> Stashed changes
 =======
             # Decoding for LSTM
 >>>>>>> Stashed changes
@@ -78,7 +92,12 @@ def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=30, d
         else:
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
             # Transformer logic
+=======
+            # Decoding for Transformer
+            # The Transformer requires sequential generation of the target
+>>>>>>> Stashed changes
 =======
             # Decoding for Transformer
             # The Transformer requires sequential generation of the target
@@ -93,6 +112,10 @@ def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=30, d
                 out = model(src_tensor, ys)
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+                # Take the last logit of the produced sequence
+>>>>>>> Stashed changes
 =======
                 # Take the last logit of the produced sequence
 >>>>>>> Stashed changes
@@ -114,6 +137,10 @@ def load_samples(data_dir, split, num_samples=10):
     samples = []
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+    # Shuffle files to avoid always taking the same chunk
+>>>>>>> Stashed changes
 =======
     # Shuffle files to avoid always taking the same chunk
 >>>>>>> Stashed changes
@@ -187,6 +214,7 @@ def run_deep_audit():
                     
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
                     print(f"    S#{i+1} | CODE: {s['code'].strip().replace('\\n', ' ')[:45]}...")
                     print(f"        REAL: {s['doc'][:60].strip()}")
                     print(f"        PRED: {prediction}")
@@ -194,6 +222,8 @@ def run_deep_audit():
         except Exception as e:
             print(f"    ❌ Error: {e}")
 =======
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
                     # Scannable Formatting
@@ -205,6 +235,9 @@ def run_deep_audit():
         except Exception as e:
             print(f"⚠️ Error on {ckpt_name}: {e}")
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
