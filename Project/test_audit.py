@@ -7,19 +7,18 @@ import glob
 import random
 import sys
 from tokenizers import Tokenizer
+from models.factory import get_model_architecture
 
-# --- [FASE 1] NORMALIZZAZIONE DETERMINISTICA ---
+# --- [PHASE 1] DETERMINISTIC NORMALIZATION ---
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from models.factory import get_model_architecture
-
 def clean_output(text):
-    """Rimuove artefatti BPE e normalizza la spaziatura."""
+    """Removes BPE artifacts and normalizes spacing."""
     return text.replace('Ġ', ' ').replace('  ', ' ').strip()
 
-# --- LOGICA DI DECODIFICA UNIVERSALE ---
+# --- UNIVERSAL DECODING LOGIC ---
 def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, device="cpu"):
     model.eval()
     sos_id = tokenizer.token_to_id("<SOS>")
