@@ -95,9 +95,11 @@ class CodeSummaryDataset(Dataset):
                 for line in f:
                     try:
                         item = json.loads(line)
+
                         #Try different keys to access each field to accomodate for many versions of dataset
                         code = item.get('code', item.get('func_code_string', ''))
                         doc = item.get('docstring', item.get('func_documentation_string', ''))
+                        
                         #Clears doc from quotation marks and other characters
                         clean_doc = clean_docstring(doc)
                         

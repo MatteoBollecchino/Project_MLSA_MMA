@@ -44,7 +44,7 @@ class ExecutionLogger:
 
     # Fingerprints hardware per telemetric audit.
     def log_sys_info(self):
-        """ Logs system information such as OS, Python version, and GPU details."""
+        """ Logs system information such as OS, Python version, and GPU details. """
 
         # System Information
         info = {
@@ -61,7 +61,7 @@ class ExecutionLogger:
 
     # Logs the duration of a macro-phase (e.g., data loading).
     def log_phase(self, phase_name, duration_seconds):
-        """ Logs the duration of a macro-phase (e.g., data loading)."""
+        """ Logs the duration of a macro-phase (e.g., data loading). """
 
         dur_str = f"{duration_seconds:.2f}s"
         self.data["durations"][phase_name] = dur_str
@@ -69,7 +69,7 @@ class ExecutionLogger:
 
     # Details about the tokenizer pipeline.
     def log_tokenizer_info(self, vocab_size, reused=True, duration=0):
-        """ Logs details about the tokenizer pipeline."""
+        """ Logs details about the tokenizer pipeline. """
 
         tok_info = {
             "vocab_size": vocab_size,
@@ -98,7 +98,7 @@ class ExecutionLogger:
 
     # Logs the final evaluation metrics after training.
     def log_final_metrics(self, df_metrics, mode="fast"):
-        """Logs the final evaluation metrics after training."""
+        """Logs the final evaluation metrics after training. """
 
         metrics = df_metrics.to_dict(orient='records')[0] if df_metrics is not None and not df_metrics.empty else {}
         metrics["eval_mode"] = mode
@@ -108,7 +108,7 @@ class ExecutionLogger:
     # Finalizes the logging by renaming the file with a timestamp prefix.
     # Renames the file with an ISO 8601 chronological prefix for LIFO ordering.
     def finalize(self):
-        """Renames the file with an ISO 8601 chronological prefix for LIFO ordering."""
+        """Renames the file with an ISO 8601 chronological prefix for LIFO ordering. """
 
         end_time = datetime.now()
         total_duration = end_time - self.start_time
@@ -116,6 +116,7 @@ class ExecutionLogger:
         
         # Extraction of Metrics for the Slug
         bleu = self.data["evaluation"].get("bleu", 0)
+        
         # If BLEU is almost zero or absent, use NA
         bleu_tag = f"B{bleu:.2f}" if bleu > 0.0001 else "NA"
         

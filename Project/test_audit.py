@@ -7,12 +7,15 @@ import glob
 import random
 import sys
 from tokenizers import Tokenizer
+from models.factory import get_model_architecture
 
-# --- [FASE 1] NORMALIZZAZIONE DETERMINISTICA ---
+
+# --- [PHASE 1] DETERMINISTIC NORMALIZATION ---
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+<<<<<<< Updated upstream
 from models.factory import get_model_architecture
 
 def clean_output(text):
@@ -21,28 +24,58 @@ def clean_output(text):
 
 # --- LOGICA DI DECODIFICA UNIVERSALE ---
 def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, device="cpu"):
+=======
+def clean_prediction(text):
+    """Removes BPE artifacts and normalizes spacing."""
+    return text.replace('Ġ', ' ').replace('  ', ' ').strip()
+
+# --- UNIVERSAL DECODING LOGIC ---
+def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=30, device="cpu"):
+    """ Performs autoregressive decoding given a model and source tensor. """
+
+>>>>>>> Stashed changes
     model.eval()
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
     
     with torch.no_grad():
         if model_tag == "lstm_attention":
+<<<<<<< Updated upstream
+=======
+            # Decoding for LSTM
+>>>>>>> Stashed changes
             encoder_outputs, hidden, cell = model.encoder(src_tensor)
             input_token = torch.LongTensor([sos_id]).to(device)
             predicted_indices = []
+            
+            # Autoregressive Loop
             for _ in range(max_len):
+                # Decoder step
                 output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+
+                # Get the most probable token
                 top1 = output.argmax(1)
+
+                # Stop if EOS is generated
                 if top1.item() == eos_id: break
                 predicted_indices.append(top1.item())
                 input_token = top1
             return predicted_indices
         else:
+<<<<<<< Updated upstream
             # Transformer logic
+=======
+            # Decoding for Transformer
+            # The Transformer requires sequential generation of the target
+>>>>>>> Stashed changes
             ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(device)
             predicted_indices = []
             for _ in range(max_len):
                 out = model(src_tensor, ys)
+<<<<<<< Updated upstream
+=======
+                # Take the last logit of the produced sequence
+>>>>>>> Stashed changes
                 next_word = out[:, -1].argmax(1).item()
                 if next_word == eos_id: break
                 predicted_indices.append(next_word)
@@ -56,6 +89,10 @@ def load_samples(data_dir, split, num_samples=10):
     if not files: return []
     
     samples = []
+<<<<<<< Updated upstream
+=======
+    # Shuffle files to avoid always taking the same chunk
+>>>>>>> Stashed changes
     random.shuffle(files)
     for file_path in files:
         try:
@@ -121,12 +158,23 @@ def run_deep_audit():
                     ids_pred = autoregressive_decode(model, src_tensor, tokenizer, model_tag, device=device)
                     prediction = clean_output(tokenizer.decode(ids_pred, skip_special_tokens=True))
                     
+<<<<<<< Updated upstream
                     print(f"    S#{i+1} | CODE: {s['code'].strip().replace('\\n', ' ')[:45]}...")
                     print(f"        REAL: {s['doc'][:60].strip()}")
                     print(f"        PRED: {prediction}")
                     print(f"        {'-'*20}")
         except Exception as e:
             print(f"    ❌ Error: {e}")
+=======
+                    # Scannable Formatting
+                    code_snippet = s['code'].replace('\n', ' ')[:40]
+                    print(f"[{i+1}/10] CODE: {code_snippet}...")
+                    print(f"      REAL: {s['doc'][:60]}")
+                    print(f"      PRED: {prediction}")
+                    print(f"      {'-'*15}")
+        except Exception as e:
+            print(f"⚠️ Error on {ckpt_name}: {e}")
+>>>>>>> Stashed changes
 
 if __name__ == "__main__":
     run_deep_audit()
