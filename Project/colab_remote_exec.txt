@@ -34,11 +34,11 @@ if device == "cuda":
 else:
     print("⚠️ ATTENZIONE: GPU NON RILEVATA! Controlla 'Runtime -> Cambia tipo di runtime'.")
 
-# 3. PROVISIONING DIPENDENZE (Ambiente Isolato)
+# 3. PROVISIONING DIPENDENZE
 print("\n--- [FASE 3] INSTALLAZIONE STRUMENTI ---")
 !pip install tokenizers tqdm nltk rouge-score -q
 
-# 4. ESECUZIONE ORCHESTRATORE (L'Attacco Finale)
+# 4. ESECUZIONE ORCHESTRATORE 
 # --subset 50000: Massa critica per eliminare il bias "DataFrame"
 # --batch_size 128: Saturazione ottimale per GPU T4 con AMP (Automatic Mixed Precision)
 # --epochs 10: Finestra di convergenza standard
