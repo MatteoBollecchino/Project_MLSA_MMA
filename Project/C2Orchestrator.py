@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from tokenizers import Tokenizer
 
-# Import interni
+# Importing project modules
 from data.download_dataset import download_codesearchnet_robust
 from data.inspect_dataset import save_human_readable_samples
 from data.preprocess import prepare_vocab

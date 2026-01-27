@@ -3,14 +3,14 @@ from tokenizers import Tokenizer
 from models.factory import get_model_architecture
 
 def run_quick_test():
-    # --- CONFIGURAZIONE ---
+    # --- CONFIGURATION ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_tag = "lstm_attention"
     tokenizer_path = "Project/tokenizer.json"
     checkpoint_path = f"Project/models/checkpoints/best_{model_tag}.pt"
     
-    # --- IL TUO CODICE DA TESTARE ---
-    # Scrivo io una funzione che filtra numeri pari da una lista
+    # --- YOUR CODE TO TEST ---
+    # I write a function that filters even numbers from a list
     code_to_summarize = """
 def is_adult(age):
     if age >= 18:
@@ -19,42 +19,42 @@ def is_adult(age):
         return False
     """
 
-    print(f"[*] Caricamento componenti per {model_tag}...")
+    print(f"[*] Loading components for {model_tag}...")
     
-    # 1. Caricamento Tokenizer e Modello
+    # 1. Loading Tokenizer and Model
     tokenizer = Tokenizer.from_file(tokenizer_path)
-    # Usiamo la factory per avere la stessa struttura usata nel C2
+    # We use the factory to have the same structure used in C2
     model = get_model_architecture(model_tag, device, vocab_size=10000)
     
-    # 2. Caricamento Pesi (Stato Cristallizzato)
+    # 2. Loading Weights (Frozen State)
     try:
         model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-        print(f"[+] Pesi caricati correttamente da {checkpoint_path}")
+        print(f"[+] Weights loaded successfully from {checkpoint_path}")
     except FileNotFoundError:
-        print(f"[!] ERRORE: Non trovo il checkpoint. Hai fatto girare il C2Orchestrator?")
+        print(f"[!] ERROR: Checkpoint not found. Did you run the C2Orchestrator?")
         return
 
     model.eval()
-    # 3. Trasformazione dell'Input (Symbolic Mapping)
-    # Aggiungiamo manualmente i tag di inizio (1) e fine (2)
+    # 3. Input Transformation (Symbolic Mapping)
+    # Manually adding start (1) and end (2) tags
     encoded = tokenizer.encode(code_to_summarize).ids
     src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
 
-    print(f"[*] Analisi codice in corso...")
+    print(f"[*] Code analysis in progress...")
 
-    # 4. Loop di Generazione (Greedy Search)
+    # 4. Generation Loop (Greedy Search)
     with torch.no_grad():
-        # L'Encoder crea il pensiero astratto (context)
+        # The Encoder creates the abstract thought (context)
         encoder_outputs, hidden, cell = model.encoder(src_tensor)
         
-        # Iniziamo la frase con <SOS>
+        # We start the sentence with <SOS>
         input_token = torch.LongTensor([tokenizer.token_to_id("<SOS>")]).to(device)
         predicted_indices = []
 
-        for _ in range(30): # Massimo 30 parole per il riassunto
+        for _ in range(30): # Maximum 30 words for the summary
             output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
             
-            # Prendiamo il token più probabile
+            # We take the most probable token
             top1 = output.argmax(1)
             token_id = top1.item()
             
@@ -62,16 +62,16 @@ def is_adult(age):
                 break
                 
             predicted_indices.append(token_id)
-            input_token = top1 # Il predetto diventa il prossimo input
+            input_token = top1 # The predicted token becomes the next input
 
-    # 5. Output Finale
+    # 5. Final Output
     prediction = tokenizer.decode(predicted_indices)
     
     print("\n" + "="*30)
-    print("CODICE INPUT:")
+    print("INPUT CODE:")
     print(code_to_summarize.strip())
     print("-" * 30)
-    print("RIASSUNTO PREDETTO:")
+    print("PREDICTED SUMMARY:")
     print(f">>> {prediction}")
     print("="*30)
 
