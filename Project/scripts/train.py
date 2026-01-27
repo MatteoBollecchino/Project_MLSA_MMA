@@ -50,7 +50,7 @@ def train_model(model, train_loader, valid_loader, config, device, telemetry=Non
  
     # Epoch loop
     for epoch in range(config.epochs):
-        epoch_start_time = time.time() # ⏱️ START TIMER EPOCH
+        epoch_start_time = time.time() # START TIMER EPOCH
         model.train()
         train_loss = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.epochs}")
