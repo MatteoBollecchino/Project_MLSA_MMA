@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-25 18:58:55
+Generated on: 2026-01-27 15:36:54
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 from tokenizers import Tokenizer
 
-# Import interni
+# Importing project modules
 from data.download_dataset import download_codesearchnet_robust
 from data.inspect_dataset import save_human_readable_samples
 from data.preprocess import prepare_vocab
@@ -24,172 +24,306 @@ from scripts.train import train_model
 from scripts.log_manager import ExecutionLogger 
 from evaluate import BatchEvaluator 
 
+# Logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# --- [MASTER PIPELINE CLASS] ---
 class CodeSummarizationPipeline:
+    """ Pipeline orchestrator for code summarization tasks. """
+
+    # Initialization of configuration of the pipeline
     def __init__(self, config):
+
         self.config = config
+
+        # self-root = path of the orchestrator
         self.root = os.path.dirname(os.path.abspath(__file__))
-        self.data_root = os.path.join(self.root, "Datasets")
-        self.jsonl_base = os.path.join(self.data_root, "python", "final", "jsonl")
+
+        # Paths configuration
+        self.dataset_root = os.path.join(self.root, "Datasets")
+        self.jsonl_base = os.path.join(self.dataset_root, "python", "final", "jsonl")
         self.tokenizer_path = os.path.join(self.root, "tokenizer.json")
         self.checkpoint_dir = os.path.join(self.root, "models", "checkpoints")
+
+        # Device configuration
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Mapping Fedeltà Valutazione
+        # Evaluation Fidelity Mapping
         self.eval_map = {"instant": 100, "fast": 200, "deep": 1000}
         self.eval_samples = self.eval_map[self.config.evaluation]
 
+    # Execution of the pipeline
     def run(self):
+        """ Main execution method of the pipeline. """
+
         logger.info(f"--- MASTER PIPELINE START | Mode: {self.config.mode.upper()} ---")
         
+        # Mode-based execution
         if self.config.mode == "train":
             if not self.config.model:
-                logger.error("❌ Errore: In modalità 'train' il parametro --model è OBBLIGATORIO.")
+                logger.error("❌ Error: In 'train' mode the --model parameter is MANDATORY.")
                 return
             self._execute_training()
         else:
             self._execute_audit()
 
+    # Execution of the training pipeline
     def _execute_training(self):
-        """Gestisce l'intera pipeline di addestramento e telemetria."""
-        # Inizializzazione Telemetria specifica per il training
+        """ Manages the entire training and telemetry pipeline. """
+
+        # Initialization of telemetry specific to training
         telemetry = ExecutionLogger(self.root, self.config.model, self.config.subset)
         telemetry.log_sys_info()
 
-        # FASE 1: DATA INFRASTRUCTURE
+        # PHASE 1: DATA INFRASTRUCTURE
         t0 = time.time()
+
+        # Dataset download if not present
         if not os.path.exists(self.jsonl_base) or self.config.force_download:
-            download_codesearchnet_robust(self.data_root)
-        save_human_readable_samples(self.data_root, "Human_readable_sample")
+            download_codesearchnet_robust(self.dataset_root)
+
+        # Save human-readable samples for inspection
+        save_human_readable_samples(self.dataset_root, "Human_readable_sample")
         telemetry.log_phase("data_infrastructure", time.time() - t0)
 
-        # FASE 2: TOKENIZER
+        # PHASE 2: TOKENIZER
         t0 = time.time()
+
+        # Tokenizer preparation (reuse if already exists and no force flag)
         reused = os.path.exists(self.tokenizer_path) and not self.config.force_preprocess
+
         if not reused:
+            # Tokenizer's Vocabulary creation
             prepare_vocab(self.jsonl_base, self.tokenizer_path)
         tokenizer_duration = time.time() - t0
         
+        # Load tokenizer and get vocabulary size
         tmp_tok = Tokenizer.from_file(self.tokenizer_path)
         vocab_size = tmp_tok.get_vocab_size()
+
+        # Logging tokenizer info
         telemetry.log_tokenizer_info(vocab_size, reused=reused, duration=tokenizer_duration)
 
-        # FASE 3: TRAINING
+        # PHASE 3: TRAINING
+
+        # Model filename configuration
         model_tag = self.config.model
         filename = f"{datetime.now().strftime('%Y%m%d_%H%M')}_{model_tag}_sub{self.config.subset if self.config.subset else 'all'}.pt"
         model_save_path = os.path.join(self.checkpoint_dir, filename)
 
+        # DataLoader preparation
         train_loader = get_dataloader(self.jsonl_base, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
+
+        # Validation DataLoader (smaller subset for speed)
         valid_loader = get_dataloader(self.jsonl_base, "valid", self.tokenizer_path, self.config.batch_size, subset=self.config.subset // 5 if self.config.subset else None)
 
         try:
+            # Model training
             t_train_start = time.time()
             model = get_model_architecture(model_tag, self.device, vocab_size=vocab_size)
             train_model(model, train_loader, valid_loader, self.config, self.device, telemetry=telemetry)
             
+            # Save the trained model
             os.makedirs(self.checkpoint_dir, exist_ok=True)
             torch.save(model.state_dict(), model_save_path)
             telemetry.log_phase("model_training", time.time() - t_train_start)
 
-            # FASE 4: AUTO-EVALUATION (Fast)
+            # PHASE 4: AUTO-EVALUATION (Fast)
             t_eval_start = time.time()
+
+            # Initialize evaluator and run evaluation
             evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.jsonl_base, subset_size=self.eval_samples)
             df_results = evaluator.run_all(specific_file=filename)
             telemetry.log_phase(f"evaluation_{self.config.evaluation}", time.time() - t_eval_start)
-
+            
+            # Log final metrics if available
             if df_results is not None:
                 telemetry.log_final_metrics(df_results, self.config.evaluation)
 
         except Exception as e:
-            logger.error(f"FAILURE durante il training: {e}")
+            logger.error(f"FAILURE during training: {e}")
             telemetry._write_to_file(f"CRITICAL ERROR: {str(e)}\n")
         finally:
             telemetry.finalize()
 
+    # Execution of the audit pipeline
     def _execute_audit(self):
-        """Esegue l'audit (valutazione) su una selezione di checkpoint esistenti."""
-        logger.info(f"🧐 Avvio Audit Mode: {self.config.evaluation.upper()} fidelity")
+        """ Executes the audit (evaluation) on a selection of existing checkpoints."""
+
+        logger.info(f"🧐 Starting Audit Mode: {self.config.evaluation.upper()} fidelity")
         
+        # Checkpoint directory validation
         if not os.path.exists(self.checkpoint_dir):
-            logger.error(f"❌ Directory checkpoints non trovata in {self.checkpoint_dir}")
+            logger.error(f"❌ Checkpoint directory not found at {self.checkpoint_dir}")
             return
 
-        # Recupero file LIFO (Last-In, First-Out)
+        # Retrieve files LIFO (Last-In, First-Out)
         all_ckpts = sorted([f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")], reverse=True)
         
         if not all_ckpts:
-            logger.error("❌ Nessun checkpoint disponibile per la valutazione.")
+            logger.error("❌ No checkpoints available for evaluation.")
             return
 
-        # Selezione dei target tramite --neval
+        # Selection of targets via --neval
         targets = []
         if self.config.neval.lower() == "all":
             targets = all_ckpts
         else:
             try:
-                # Converte "1,2,4" in indici di lista [0, 1, 3]
+                # Converts "1,2,4" into list indices [0, 1, 3]
                 indices = [int(i.strip()) - 1 for i in self.config.neval.split(",")]
                 targets = [all_ckpts[i] for i in indices if 0 <= i < len(all_ckpts)]
             except (ValueError, IndexError) as e:
-                logger.error(f"❌ Errore nel formato --neval '{self.config.neval}': {e}")
+                logger.error(f"❌ Error in --neval format '{self.config.neval}': {e}")
                 return
 
         if not targets:
-            logger.warning("⚠️ Nessun checkpoint corrispondente agli indici forniti.")
+            logger.warning("⚠️ No checkpoints matching the provided indices.")
             return
 
-        logger.info(f"🔎 Modelli in esame: {targets}")
+        logger.info(f"🔎 Models under review: {targets}")
 
-        # Inizializzazione Evaluator
+        # Initializing Evaluator
         evaluator = BatchEvaluator(
             self.device, self.tokenizer_path, self.checkpoint_dir, 
             self.jsonl_base, subset_size=self.eval_samples
         )
 
         t_audit_start = time.time()
+
+        # Running evaluation on each selected checkpoint
         for ckpt in targets:
-            logger.info(f"--- Analisi: {ckpt} ---")
+            logger.info(f"--- Analysis: {ckpt} ---")
+
+            # Execute evaluation
             df_res = evaluator.run_all(specific_file=ckpt)
+
             if df_res is not None:
                 print(f"\n{df_res.to_string(index=False)}\n")
         
-        logger.info(f"✅ Audit completato in {time.time() - t_audit_start:.2f}s")
+        logger.info(f"✅ Audit completed in {time.time() - t_audit_start:.2f}s")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="C2 Orchestrator V7 - Multitask AI Pipeline")
+
+    # Declaration of the parser for command line arguments
+    parser = argparse.ArgumentParser(description="C2 Orchestrator - Pipeline")
     
-    # Switch principale di modalità
+    # Modality switch of the pipeline (train / eval)
     parser.add_argument("--mode", type=str, default="train", choices=["train", "eval"], 
-                        help="Scegli tra addestramento o valutazione pura")
+                        help="Choose 'train' to train a new model or 'eval' to audit existing checkpoints")
     
-    # Parametri Modello & Training
+    # Model parameters & Training
     parser.add_argument("--model", type=str, choices=["transformer", "lstm_attention"], 
-                        help="Architettura (Obbligatoria solo in --mode train)")
-    parser.add_argument("--subset", type=int, default=None, help="Dimensione dataset training")
+                        help="Architecture (Required only in --mode train)")
+    parser.add_argument("--subset", type=int, default=None, help="Training dataset size")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=128)
     
-    # Parametri Audit / Evaluation
+    # Audit / Evaluation parameters
     parser.add_argument("--neval", type=str, default="1", 
-                        help="'all' per tutti i checkpoint, oppure indici separati da virgola (es. 1,2,4) basati su ordine cronologico inverso")
-    parser.add_argument("--evaluation", type=str, default="fast", choices=["instant", "fast", "deep"], 
-                        help="Profondità della valutazione (100, 200, 1000 campioni)")
-
-    # Flags Infrastruttura
-    parser.add_argument("--force_download", action="store_true")
-    parser.add_argument("--force_preprocess", action="store_true")
-    parser.add_argument("--skip_train", action="store_true", help="Vecchio flag per compatibilità, preferire --mode eval")
+                        help="'all' for all checkpoints, or comma-separated indices (e.g., 1,2,4) based on reverse chronological order")
     
+    # Evaluation depth parameter
+    parser.add_argument("--evaluation", type=str, default="fast", choices=["instant", "fast", "deep"], 
+                        help="Depth of evaluation (100, 200, 1000 samples)")
+
+    # INFRASTRUCTURE FLAGS
+    # Force re-download of the dataset
+    parser.add_argument("--force_download", action="store_true")
+
+    # Force re-preprocessing of the dataset (vocab + tokenization)
+    parser.add_argument("--force_preprocess", action="store_true")
+
+    # Deprecated flag for compatibility
+    parser.add_argument("--skip_train", action="store_true", help="Old flag for compatibility, prefer --mode eval")
+    
+    # Parsing of arguments
     args = parser.parse_args()
     
-    # Override per compatibilità se l'utente usa ancora --skip_train
+    # Override for compatibility if the user still uses --skip_train
     if args.skip_train:
         args.mode = "eval"
 
+    # Declaration and execution of the pipeline
     pipeline = CodeSummarizationPipeline(args)
     pipeline.run()
+
+================================================================================
+
+--- FILE: README.md | PATH: Project\README.md ---
+-------------------------------------------------
+
+# Project Core
+
+This directory contains the core source code for the Code Summarization project.
+
+## Project Structure
+
+- `data/`: Scripts for data downloading, preprocessing, and loading (`dataset.py`, `download_dataset.py`, `preprocess.py`).
+- `models/`: Contains the implementation of the neural network models, such as `transformer.py` and `seq2seq.py`.
+- `scripts/`: Main scripts to execute training (`train.py`) and other utilities.
+- `C2Orchestrator.py`: The main orchestrator script to run training and evaluation tasks.
+- `evaluate.py`: Script to evaluate a trained model.
+- `requirements.txt`: A list of the Python dependencies for the project.
+- `logs/`: Contains log files from training runs.
+- `Datasets/`: Default directory where the datasets are stored.
+
+## How to Run
+
+### Prerequisites
+
+1.  Make sure you are in this (`Project`) directory.
+2.  Install the required dependencies:
+    ```sh
+    pip install -r requirements.txt
+    ```
+
+### Training Commands
+
+**Transformer Model:**
+To train the Transformer model with a subset of 50,000 samples for 10 epochs and a batch size of 128, run:
+```sh
+python C2Orchestrator.py --model transformer --subset 50000 --epochs 10 --batch_size 128 --force_train
+```
+
+**LSTM with Attention Model:**
+To train the LSTM with Attention model with a subset of 50,000 samples for 5 epochs and a batch size of 64, run:
+```sh
+python C2Orchestrator.py --model lstm_attention --subset 50000 --epochs 5 --batch_size 64
+```
+
+## Command-line Arguments
+
+The `C2Orchestrator.py` script accepts several arguments to control its behavior:
+
+### Main Modes
+-   `--mode`: Choose the operational mode.
+    -   `train` (default): Train a new model.
+    -   `eval`: Audit and evaluate existing checkpoints.
+-   `--model`: (Required for `train` mode) Specifies the model architecture.
+    -   `transformer`: Use the Transformer model.
+    -   `lstm_attention`: Use the LSTM with Attention model.
+
+### Training Parameters
+-   `--subset`: Specifies the number of samples from the dataset to use for training. (e.g., `50000`). If not provided, the entire dataset is used.
+-   `--epochs`: The number of complete passes through the training dataset. (default: `10`).
+-   `--batch_size`: The number of samples per batch to load. (default: `128`).
+
+### Evaluation Parameters
+-   `--neval`: (For `eval` mode) Specifies which saved models to evaluate.
+    -   `1` (default): Evaluates the most recent model.
+    -   `all`: Evaluates all models found in the checkpoints directory.
+    -   `1,2,4`: Evaluates specific models by their index in a reverse-chronological list.
+-   `--evaluation`: Determines the number of samples to use for the evaluation process.
+    -   `instant`: 100 samples.
+    -   `fast` (default): 200 samples.
+    -   `deep`: 1000 samples.
+
+### Infrastructure Flags
+-   `--force_download`: A flag that, when present, forces the re-download of the dataset even if it already exists.
+-   `--force_preprocess`: A flag that forces the re-creation of the tokenizer vocabulary.
+
 
 ================================================================================
 
@@ -232,11 +366,11 @@ if device == "cuda":
 else:
     print("⚠️ ATTENZIONE: GPU NON RILEVATA! Controlla 'Runtime -> Cambia tipo di runtime'.")
 
-# 3. PROVISIONING DIPENDENZE (Ambiente Isolato)
+# 3. PROVISIONING DIPENDENZE
 print("\n--- [FASE 3] INSTALLAZIONE STRUMENTI ---")
 !pip install tokenizers tqdm nltk rouge-score -q
 
-# 4. ESECUZIONE ORCHESTRATORE (L'Attacco Finale)
+# 4. ESECUZIONE ORCHESTRATORE 
 # --subset 50000: Massa critica per eliminare il bias "DataFrame"
 # --batch_size 128: Saturazione ottimale per GPU T4 con AMP (Automatic Mixed Precision)
 # --epochs 10: Finestra di convergenza standard
@@ -344,19 +478,25 @@ from tqdm import tqdm
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 from rouge_score import rouge_scorer
 from tokenizers import Tokenizer
+from models.factory import get_model_architecture
+from data.dataset import get_dataloader
 
-# Risoluzione percorsi per import interni
+# Resolution paths for internal imports
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from models.factory import get_model_architecture
-from data.dataset import get_dataloader
-
+# Logger Configuration
 logger = logging.getLogger(__name__)
 
+# --- [BATCH EVALUATOR CLASS] ---
 class BatchEvaluator:
+    """ Class for batch evaluation of model checkpoints. """
+
+    # Initialization of the BatchEvaluator
     def __init__(self, device, tokenizer_path, checkpoint_dir, data_path, subset_size=200):
+        """ Initializes the BatchEvaluator with necessary parameters. """
+
         self.device = device
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.vocab_size = self.tokenizer.get_vocab_size()
@@ -366,59 +506,105 @@ class BatchEvaluator:
         self.subset_size = subset_size
         self.results = []
 
+    # Evaluates a single checkpoint
     def evaluate_single_checkpoint(self, checkpoint_name):
+        """ Evaluates a single model checkpoint and computes BLEU and ROUGE-L scores. """
+
+        # Determine model type from filename
         model_tag = "transformer" if "transformer" in checkpoint_name.lower() else "lstm_attention"
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
         
+        # Load model
         try:
+            # Instantiate model architecture
             model = get_model_architecture(model_tag, self.device, vocab_size=self.vocab_size)
+            
+            # Load model state
             model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+            
+            # Evaluation of the model
             model.eval()
+
         except Exception as e:
             return {"file": checkpoint_name, "error": f"Load error: {str(e)}"}
         
+        # Prepare test data loader
         test_loader = get_dataloader(
             self.data_path, "test", 
             self.tokenizer_path, batch_size=1, subset=self.subset_size
         )
 
+        # Initialize references and hypotheses for evaluation metrics 
         references, hypotheses = [], []
         sos_id, eos_id = self.tokenizer.token_to_id("<SOS>"), self.tokenizer.token_to_id("<EOS>")
 
+        # Inference loop
         with torch.no_grad():
             for src, trg in tqdm(test_loader, desc=f"Valutazione {model_tag}", leave=False):
                 src = src.to(self.device)
                 predicted_indices = []
 
+                # Evaluation for LSTM with Attention
                 if model_tag == "lstm_attention":
+                    # Encode the source sequence
                     encoder_outputs, hidden, cell = model.encoder(src)
+
+                    # Initialize input token
                     input_token = torch.LongTensor([sos_id]).to(self.device)
+
+                    # Decoding loop
                     for _ in range(30):
+                        # Generate next token
                         output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+
+                        # Get the token with highest probability
                         top1 = output.argmax(1)
+
+                        # Break if EOS token is generated
                         if top1.item() == eos_id: break
+
+                        # Append predicted token and update input
                         predicted_indices.append(top1.item())
                         input_token = top1
+                
+                # Evaluation for Transformer
                 else:
+                    # Initial input sequence with SOS token
                     ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(self.device)
+
+                    # Decoding loop
                     for _ in range(30):
+                        # Generate next token
                         out = model(src, ys)
+
+                        # Get the token with highest probability
                         next_word = out[:, -1].argmax(1).item()
+
+                        # Break if EOS token is generated
                         if next_word == eos_id: break
+
+                        # Append predicted token and update input sequence
                         predicted_indices.append(next_word)
                         ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(self.device)], dim=1)
 
+                # Decode predictions and references
                 pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
                 real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
+
+                # Append to lists for metric calculation
                 hypotheses.append(pred_text.split()); references.append([real_text.split()])
 
+        # Calculate BLEU and ROUGE-L scores
         bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
         scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         rougeL = sum(scorer.score(" ".join(r[0]), " ".join(h))['rougeL'].fmeasure for h, r in zip(hypotheses, references)) / len(hypotheses)
         
         return {"file": checkpoint_name, "bleu": bleu, "rougeL": rougeL}
 
+    # Runs evaluation on all checkpoints or a specific file
     def run_all(self, specific_file=None):
+        """ Runs evaluation on all checkpoints or a specific checkpoint file. """
+        
         files = [specific_file] if specific_file else [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
         if not files: return None
 
@@ -427,6 +613,7 @@ class BatchEvaluator:
             res = self.evaluate_single_checkpoint(ckpt)
             if "error" not in res: self.results.append(res)
         
+        # Return results as DataFrame
         return pd.DataFrame(self.results)
 
 ================================================================================
@@ -434,13 +621,17 @@ class BatchEvaluator:
 --- FILE: requirements.txt | PATH: Project\requirements.txt ---
 ---------------------------------------------------------------
 
-# requirements.txt generated by script on 2026-01-12
-# This is a best-effort list based on static analysis.
-# Package names may differ from import names (e.g., 'sklearn' -> 'scikit-learn').
-# Please review and update as necessary.
+--index-url https://download.pytorch.org/whl/cu124
 
-# No third-party packages detected.
-
+torch
+torchvision
+torchaudio
+tokenizers
+tqdm
+pandas
+nltk
+rouge-score
+requests
 
 ================================================================================
 
@@ -452,14 +643,14 @@ from tokenizers import Tokenizer
 from models.factory import get_model_architecture
 
 def run_quick_test():
-    # --- CONFIGURAZIONE ---
+    # --- CONFIGURATION ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_tag = "lstm_attention"
     tokenizer_path = "Project/tokenizer.json"
     checkpoint_path = f"Project/models/checkpoints/best_{model_tag}.pt"
     
-    # --- IL TUO CODICE DA TESTARE ---
-    # Scrivo io una funzione che filtra numeri pari da una lista
+    # --- YOUR CODE TO TEST ---
+    # I write a function that filters even numbers from a list
     code_to_summarize = """
 def is_adult(age):
     if age >= 18:
@@ -468,42 +659,42 @@ def is_adult(age):
         return False
     """
 
-    print(f"[*] Caricamento componenti per {model_tag}...")
+    print(f"[*] Loading components for {model_tag}...")
     
-    # 1. Caricamento Tokenizer e Modello
+    # 1. Loading Tokenizer and Model
     tokenizer = Tokenizer.from_file(tokenizer_path)
-    # Usiamo la factory per avere la stessa struttura usata nel C2
+    # We use the factory to have the same structure used in C2
     model = get_model_architecture(model_tag, device, vocab_size=10000)
     
-    # 2. Caricamento Pesi (Stato Cristallizzato)
+    # 2. Loading Weights (Frozen State)
     try:
         model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-        print(f"[+] Pesi caricati correttamente da {checkpoint_path}")
+        print(f"[+] Weights loaded successfully from {checkpoint_path}")
     except FileNotFoundError:
-        print(f"[!] ERRORE: Non trovo il checkpoint. Hai fatto girare il C2Orchestrator?")
+        print(f"[!] ERROR: Checkpoint not found. Did you run the C2Orchestrator?")
         return
 
     model.eval()
-    # 3. Trasformazione dell'Input (Symbolic Mapping)
-    # Aggiungiamo manualmente i tag di inizio (1) e fine (2)
+    # 3. Input Transformation (Symbolic Mapping)
+    # Manually adding start (1) and end (2) tags
     encoded = tokenizer.encode(code_to_summarize).ids
     src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
 
-    print(f"[*] Analisi codice in corso...")
+    print(f"[*] Code analysis in progress...")
 
-    # 4. Loop di Generazione (Greedy Search)
+    # 4. Generation Loop (Greedy Search)
     with torch.no_grad():
-        # L'Encoder crea il pensiero astratto (context)
+        # The Encoder creates the abstract thought (context)
         encoder_outputs, hidden, cell = model.encoder(src_tensor)
         
-        # Iniziamo la frase con <SOS>
+        # We start the sentence with <SOS>
         input_token = torch.LongTensor([tokenizer.token_to_id("<SOS>")]).to(device)
         predicted_indices = []
 
-        for _ in range(30): # Massimo 30 parole per il riassunto
+        for _ in range(30): # Maximum 30 words for the summary
             output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
             
-            # Prendiamo il token più probabile
+            # We take the most probable token
             top1 = output.argmax(1)
             token_id = top1.item()
             
@@ -511,16 +702,16 @@ def is_adult(age):
                 break
                 
             predicted_indices.append(token_id)
-            input_token = top1 # Il predetto diventa il prossimo input
+            input_token = top1 # The predicted token becomes the next input
 
-    # 5. Output Finale
+    # 5. Final Output
     prediction = tokenizer.decode(predicted_indices)
     
     print("\n" + "="*30)
-    print("CODICE INPUT:")
+    print("INPUT CODE:")
     print(code_to_summarize.strip())
     print("-" * 30)
-    print("RIASSUNTO PREDETTO:")
+    print("PREDICTED SUMMARY:")
     print(f">>> {prediction}")
     print("="*30)
 
@@ -541,176 +732,128 @@ import glob
 import random
 import sys
 from tokenizers import Tokenizer
+from models.factory import get_model_architecture
 
-# --- [FASE 1] NORMALIZZAZIONE DETERMINISTICA ---
+# --- [PHASE 1] DETERMINISTIC NORMALIZATION ---
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from models.factory import get_model_architecture
+def clean_output(text):
+    """Removes BPE artifacts and normalizes spacing."""
+    return text.replace('Ġ', ' ').replace('  ', ' ').strip()
 
-# --- LOGICA DI DECODIFICA AVANZATA ---
-def beam_search_decode(model, src_tensor, tokenizer, beam_width=5, max_len=30, temp=1.2):
-    device = src_tensor.device
+# --- UNIVERSAL DECODING LOGIC ---
+def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, device="cpu"):
+    model.eval()
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
-
-    # Nota: Questa logica assume un'architettura LSTM/RNN. 
-    # Per il Transformer la logica di beam search differisce (niente hidden/cell).
+    
     with torch.no_grad():
-        encoder_outputs, hidden, cell = model.encoder(src_tensor)
-
-    beams = [(0.0, [sos_id], hidden, cell)]
-
-    for _ in range(max_len):
-        candidates = []
-        for log_prob, tokens, h, c in beams:
-            if tokens[-1] == eos_id:
-                candidates.append((log_prob, tokens, h, c))
-                continue
-
-            input_token = torch.LongTensor([tokens[-1]]).to(device)
-            with torch.no_grad():
-                output, h_next, c_next = model.decoder(input_token, h, c, encoder_outputs)
-            
-            probs = F.log_softmax(output / temp, dim=1)
-            topk_probs, topk_ids = probs.topk(beam_width)
-
-            for i in range(beam_width):
-                next_log_prob = log_prob + topk_probs[0][i].item()
-                next_tokens = tokens + [topk_ids[0][i].item()]
-                candidates.append((next_log_prob, next_tokens, h_next, c_next))
-
-        beams = sorted(candidates, key=lambda x: x[0], reverse=True)[:beam_width]
-        if all(b[1][-1] == eos_id for b in beams):
-            break
-
-    return beams[0][1]
+        if model_tag == "lstm_attention":
+            encoder_outputs, hidden, cell = model.encoder(src_tensor)
+            input_token = torch.LongTensor([sos_id]).to(device)
+            predicted_indices = []
+            for _ in range(max_len):
+                output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+                top1 = output.argmax(1)
+                if top1.item() == eos_id: break
+                predicted_indices.append(top1.item())
+                input_token = top1
+            return predicted_indices
+        else:
+            # Transformer logic
+            ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(device)
+            predicted_indices = []
+            for _ in range(max_len):
+                out = model(src_tensor, ys)
+                next_word = out[:, -1].argmax(1).item()
+                if next_word == eos_id: break
+                predicted_indices.append(next_word)
+                ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(device)], dim=1)
+            return predicted_indices
 
 # --- DATA LOADING ---
-def load_random_samples(data_dir, split, num_samples=2):
+def load_samples(data_dir, split, num_samples=10):
     search_pattern = os.path.join(data_dir, split, "*.jsonl.gz")
     files = glob.glob(search_pattern)
     if not files: return []
     
     samples = []
-    try:
-        with gzip.open(random.choice(files), 'rt', encoding='utf-8') as f:
-            lines = f.readlines()
-            chosen = random.sample(lines, min(num_samples, len(lines)))
-            for c in chosen:
-                item = json.loads(c)
-                samples.append({
-                    'code': item.get('code', item.get('func_code_string', '')),
-                    'doc': item.get('docstring', item.get('func_documentation_string', ''))
-                })
-    except: pass
-    return samples
+    random.shuffle(files)
+    for file_path in files:
+        try:
+            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                lines = f.readlines()
+                chosen = random.sample(lines, min(num_samples - len(samples), len(lines)))
+                for c in chosen:
+                    item = json.loads(c)
+                    samples.append({
+                        'code': item.get('code', item.get('func_code_string', '')),
+                        'doc': item.get('docstring', item.get('func_documentation_string', ''))
+                    })
+            if len(samples) >= num_samples: break
+        except: continue
+    return samples[:num_samples]
 
 # --- CORE AUDIT ENGINE ---
 def run_deep_audit():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
     tokenizer_path = os.path.join(project_root, "tokenizer.json")
     checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
     data_root = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
 
-    if not os.path.exists(tokenizer_path):
-        print(f"❌ Tokenizer non trovato in: {tokenizer_path}")
-        return
-
-    # --- [FASE 2] ESTRAZIONE DINAMICA VOCAB ---
     tokenizer = Tokenizer.from_file(tokenizer_path)
-    current_vocab_size = tokenizer.get_vocab_size()
-    print(f"💡 Vocabolario rilevato: {current_vocab_size} token")
+    vocab_size = tokenizer.get_vocab_size()
     
-    if not os.path.exists(checkpoint_dir):
-        print(f"❌ Directory checkpoints non trovata: {checkpoint_dir}")
-        return
-        
-    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
-    if not checkpoints:
-        print("❌ Nessun file .pt trovato.")
-        return
-
+    # --- SUITE 10-10-10 ALIGNMENT ---
     suites = {
-        "TRAIN (Memorization)": load_random_samples(data_root, "train", 2),
-        "TEST (Generalization)": load_random_samples(data_root, "test", 2),
-        "CUSTOM (Injection)": [
-            {"code": "def power(a, b): return a ** b", "doc": "Calculates power of a number."},
-            {"code": "def check_empty(l): return len(l) == 0", "doc": "Checks if list is empty."}
+        "TRAIN (Memorization)": load_samples(data_root, "train", 10),
+        "TEST (Generalization)": load_samples(data_root, "test", 10),
+        "CUSTOM (High Complexity Alignment)": [
+            {"code": "def load_config(path):\n    with open(path, 'r') as f:\n        return json.load(f)", "doc": "Loads a configuration file from a JSON path."},
+            {"code": "def get_db_connection(url):\n    try:\n        return create_engine(url).connect()\n    except Exception as e:\n        raise ConnectionError(e)", "doc": "Establishes a connection to the database or raises error."},
+            {"code": "def process_image_batch(images, size):\n    return [cv2.resize(img, size) for img in images]", "doc": "Resizes a batch of images to a specific dimension."},
+            {"code": "def calculate_rdd_mean(rdd):\n    return rdd.map(lambda x: (x, 1)).reduce(lambda a, b: (a[0]+b[0], a[1]+b[1]))", "doc": "Computes the mean of an RDD using map and reduce."},
+            {"code": "def detect_faces_cnn(img):\n    return cnn_face_detector(img, upsample_num=1)", "doc": "Uses a CNN model to detect human faces in an image."},
+            {"code": "def walk_dir_tree(root):\n    for root, dirs, files in os.walk(root):\n        yield files", "doc": "Recursively yields files from a directory tree structure."},
+            {"code": "def apply_mask(tensor, mask_val=0):\n    return tensor.masked_fill(tensor == mask_val, float('-inf'))", "doc": "Applies a padding mask to a given input tensor."},
+            {"code": "def validate_token_auth(token):\n    if not token.startswith('Bearer '):\n        return False\n    return verify_jwt(token)", "doc": "Verifies if the provided token is a valid JWT Bearer."},
+            {"code": "def serialize_row_as_dict(row):\n    return {field: getattr(row, field) for field in row.__fields__}", "doc": "Converts a dataset row object into a standard dictionary."},
+            {"code": "def compute_euclidean_dist(a, b):\n    return np.linalg.norm(a - b, axis=1)", "doc": "Calculates the euclidean distance between two numpy arrays."}
         ]
     }
 
-    print(f"\n{'='*80}\n🚀 STARTING BATCH AUDIT | DEVICE: {device}\n{'='*80}")
+    checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
+    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | SAMPLES: 10-10-10\n{'='*90}")
 
-    for ckpt_name in sorted(checkpoints):
-        print(f"\n🔍 ANALYZING CHECKPOINT: {ckpt_name}")
-        model_tag = "transformer" if "transformer" in ckpt_name.lower() else "lstm_attention"
+    for ckpt in sorted(checkpoints):
+        print(f"\n🔍 CHECKPOINT: {ckpt}")
+        model_tag = "transformer" if "transformer" in ckpt.lower() else "lstm_attention"
         
         try:
-            # Passiamo esplicitamente vocab_size per evitare mismatch
-            model = get_model_architecture(model_tag, device, vocab_size=current_vocab_size)
-            ckpt_path = os.path.join(checkpoint_dir, ckpt_name)
-            
-            # Caricamento pesi
-            state_dict = torch.load(ckpt_path, map_location=device)
-            model.load_state_dict(state_dict)
+            model = get_model_architecture(model_tag, device, vocab_size=vocab_size)
+            model.load_state_dict(torch.load(os.path.join(checkpoint_dir, ckpt), map_location=device))
             model.eval()
 
             for suite_name, samples in suites.items():
                 print(f"\n   >>> SUITE: {suite_name}")
                 for i, s in enumerate(samples):
-                    encoded = tokenizer.encode(s['code']).ids
-                    # Nota: Assicurati che 1 e 2 siano SOS e EOS nel tuo tokenizer
-                    src_tensor = torch.LongTensor([1] + encoded + [2]).unsqueeze(0).to(device)
+                    ids_input = tokenizer.encode(s['code']).ids
+                    src_tensor = torch.LongTensor([1] + ids_input + [2]).unsqueeze(0).to(device)
                     
-                    # Decoding con Beam Search (solo per LSTM)
-                    if model_tag == "lstm_attention":
-                        ids = beam_search_decode(model, src_tensor, tokenizer)
-                    else:
-                        # Logica di decoding base per Transformer (da implementare se necessario)
-                        ids = [1] # Placeholder
-                        
-                    prediction = tokenizer.decode(ids, skip_special_tokens=True).strip()
+                    ids_pred = autoregressive_decode(model, src_tensor, tokenizer, model_tag, device=device)
+                    prediction = clean_output(tokenizer.decode(ids_pred, skip_special_tokens=True))
                     
-                    print(f"    SAMPLE #{i+1} | CODE: {s['code'].strip()[:50].replace('\\n', ' ')}...")
-                    print(f"    REAL: {s['doc'][:60].strip()}...")
-                    print(f"    PRED: {prediction}")
-                    print(f"    {'-'*20}")
+                    print(f"    S#{i+1} | CODE: {s['code'].strip().replace('\\n', ' ')[:45]}...")
+                    print(f"        REAL: {s['doc'][:60].strip()}")
+                    print(f"        PRED: {prediction}")
+                    print(f"        {'-'*20}")
         except Exception as e:
-            print(f"    ❌ Critical Error su {ckpt_name}: {e}")
+            print(f"    ❌ Error: {e}")
 
 if __name__ == "__main__":
     run_deep_audit()
-
-================================================================================
-
---- FILE: README.md | PATH: Project\data\README.md ---
-------------------------------------------------------
-
-# Cartella `data`
-
-Questa cartella conterrà tutti gli script e i file relativi alla gestione del dataset.
-
-## Implementazione Prevista
-
-1.  **Script di Acquisizione (`download_dataset.py`):**
-    *   Uno script per scaricare e scompattare il dataset (es. CodeSearchNet) nella cartella `Project/Datasets`.
-    *   Dovrebbe permettere di scaricare anche solo un subset per testare rapidamente la pipeline.
-
-2.  **Script di Preprocessing (`preprocess.py`):**
-    *   **Tokenizzazione:** Questo script si occuperà di convertire sia il codice sorgente che i riassunti testuali in sequenze di token. Verranno usati tokenizer specifici (es. BPE) per ogni "linguaggio" (codice e testo).
-    *   **Costruzione Vocabolario:** Creerà e salverà i vocabolari (mappe `token -> id`) per il codice e per i riassunti, includendo token speciali come `<PAD>`, `<SOS>`, `<EOS>`, `<UNK>`.
-
-3.  **Classe `Dataset` PyTorch (`dataset.py`):**
-    *   Implementerà una classe `torch.utils.data.Dataset` custom.
-    *   Questa classe leggerà i dati pre-processati, li convertirà in tensori numerici e li servirà al `DataLoader`.
-
-4.  **Funzione di Utilità per `DataLoader`:**
-    *   Una funzione helper che, data una classe `Dataset`, istanzi e restituisca i `DataLoader` per training, validazione e test.
-    *   Gestirà la logica per il padding dei batch (tramite l'argomento `collate_fn`) in modo che tutte le sequenze in un batch abbiano la stessa lunghezza.
-
 
 ================================================================================
 
@@ -730,34 +873,66 @@ import multiprocessing
 from tqdm import tqdm
 from tokenizers import Tokenizer
 
-# --- [FASE 1] DATA SANITIZATION (GIGO Principle) o vediamo se ora funziona eh ---
+# --- [PHASE 1] DATA SANITIZATION & INTEGRITY (Principio GIGO) ---
+
 def clean_docstring(doc):
-    """Estrae l'essenza della docstring rimuovendo il rumore tecnico."""
+    """
+    Applys a semantic filter.
+    Removes technical 'noise' (documentation tags, tests) to leave
+    only the logical description of the function.
+    """
     if not doc: return ""
+
+    # Take only the first line: this is where the essence (Headline) resides
     first_line = doc.split('\n\n')[0].split('\n')[0]
+    
+    # Regex to amputate Sphinx/Google-style tags (:param, @return, etc.)
     clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
+    
+    # Remove residues of interactive tests (doctest)
     clean = re.sub(r'>>>.*', '', clean)
+
     return clean.strip()
 
 def compute_content_hash(code, doc):
-    """Fingerprint deterministico per la deduplicazione."""
+    """
+    Generates a SHA-256 'fingerprint' for atomic deduplication.
+    Prevents the model from cheating by memorizing duplicate samples.
+    """
+    # Normalize spaces to prevent formatting from affecting the hash
     normalized = (re.sub(r'\s+', '', code) + doc).encode('utf-8')
     return hashlib.sha256(normalized).hexdigest()
 
-# --- [FASE 2] OPTIMIZED COLLATOR ---
+
+# --- [PHASE 2] OPTIMIZED COLLATOR (Dynamic Padding) ---
+
 class SmartCollator:
+    """
+    Transforms a list of samples into a mathematically coherent Batch.
+    """
     def __init__(self, pad_id):
         self.pad_id = pad_id
 
     def __call__(self, batch):
+        # Separate code and docstring from the batch
         code_seqs, doc_seqs = zip(*batch)
-        # Padding dinamico al batch_max per efficienza computazionale
+
+        # [OPTIMIZATION] Dynamic Padding:
+        # Instead of padding everything to 256, we pad only up to the length 
+        # of the current batch's maximum. This speeds up Attention by orders of magnitude.
         code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=self.pad_id)
         doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=self.pad_id)
+
         return code_padded, doc_padded
 
-# --- [FASE 3] ASYMMETRIC CACHING ENGINE ---
+
+# --- [PHASE 3] ASYMMETRIC CACHING ENGINE (Dataset Core) ---
+
 class CodeSummaryDataset(Dataset):
+    """
+    The data warehouse. Implements in-RAM caching to eliminate
+    filesystem latency during the training loop.
+    """
     def __init__(self, data_dir, split_type, tokenizer_path, max_len_code=256, max_len_doc=64, subset=None):
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.max_len_code = max_len_code
@@ -765,7 +940,7 @@ class CodeSummaryDataset(Dataset):
         self.data = []
         self.seen_hashes = set()
 
-        # Pre-fetch ID token speciali
+        # Extract special IDs to avoid repeated calls to the tokenizer
         self.pad_id = self.tokenizer.token_to_id("<PAD>")
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
         self.eos_id = self.tokenizer.token_to_id("<EOS>")
@@ -774,50 +949,63 @@ class CodeSummaryDataset(Dataset):
         files = glob.glob(search_pattern)
         
         if not files:
-            raise FileNotFoundError(f"❌ Sorgente dati non trovata: {search_pattern}")
-
-        print(f"🔍 [MEM_CACHE] Caricamento e Tokenizzazione '{split_type}'...")
+            raise FileNotFoundError(f"❌ Data source not found: {search_pattern}")
+        print(f"🔍 [MEM_CACHE] Loading and Tokenizing '{split_type}'...")
 
         for file_path in files:
             with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-                # Usiamo tqdm per monitorare il caricamento iniziale (che sarà più lento, ma salva l'epoca)
                 for line in f:
                     try:
                         item = json.loads(line)
+
+                        #Try different keys to access each field to accomodate for many versions of dataset
                         code = item.get('code', item.get('func_code_string', ''))
                         doc = item.get('docstring', item.get('func_documentation_string', ''))
+                        
+                        #Clears doc from quotation marks and other characters
                         clean_doc = clean_docstring(doc)
                         
+                        # Quality Filter: exclude fragments that are too short or too long
                         if len(clean_doc) > 10 and 10 < len(code.split()) < 250:
                             f_hash = compute_content_hash(code, clean_doc)
+                            
+                            # Deduplication
                             if f_hash not in self.seen_hashes:
                                 self.seen_hashes.add(f_hash)
                                 
-                                # --- [CRITICO] TOKENIZZAZIONE A MONTE ---
-                                # Trasformiamo subito in tensori per liberare la CPU durante il training
+                                # --- [CRITICAL] TOKENIZATION UPFRONT ---
+                                # Perform the text -> numbers transformation HERE.
+                                # This frees the CPU during actual training.
                                 c_tokens = self.tokenizer.encode(code).ids
                                 d_tokens = self.tokenizer.encode(clean_doc).ids
                                 
+                                # Assemble tensor with Start-of-Sequence and End-of-Sequence
                                 code_tensor = torch.tensor([self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id])
                                 doc_tensor = torch.tensor([self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id])
                                 
                                 self.data.append((code_tensor, doc_tensor))
                         
+                        # Subset management (for quick debugging)
                         if subset and len(self.data) >= subset: break
                     except: continue
                 if subset and len(self.data) >= subset: break
         
-        print(f"✅ Cache Pronta: {len(self.data)} campioni caricati in RAM.")
+        print(f"✅ Cache Ready: {len(self.data)} samples loaded into RAM.")
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        # Restituiamo i tensori pre-calcolati: Zero overhead CPU durante l'epoca
+        # Direct RAM access: O(1) complexity. Zero CPU overhead.
         return self.data[idx]
 
-# --- [FASE 4] HIGH-THROUGHPUT FACTORY ---
+
+# --- [PHASE 4] HIGH-THROUGHPUT FACTORY (DataLoader) ---
+
 def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
+    """
+    Configures the data pump to the GPU.
+    """
     dataset = CodeSummaryDataset(
         data_dir, split_type, tokenizer_path, 
         max_len_code=256, 
@@ -827,7 +1015,9 @@ def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=
     
     collator = SmartCollator(dataset.pad_id)
     
-    # Su Windows con RTX 40, usiamo 4 workers e prefetch aggressivo
+    # [HARDWARE OPTIMIZATION]
+    # On Windows, we use parallel workers and pin_memory to speed up
+    # the transfer via the PCIe bus to the GPU's Tensor Cores.
     cpu_count = multiprocessing.cpu_count()
     workers = min(cpu_count, 4) if torch.cuda.is_available() else 0
     
@@ -837,9 +1027,9 @@ def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=
         shuffle=shuffle, 
         collate_fn=collator,
         num_workers=workers,
-        pin_memory=True, # Velocizza il trasferimento PCIe verso la GPU
-        prefetch_factor=2 if workers > 0 else None,
-        persistent_workers=True if workers > 0 else False
+        pin_memory=True,            # Locked RAM for fast DMA transfer
+        prefetch_factor=2 if workers > 0 else None, # Prepare batches in advance
+        persistent_workers=True if workers > 0 else False # Do not destroy processes between epochs
     )
 
 ================================================================================
@@ -854,6 +1044,7 @@ import io
 
 # DOWNLOAD AND EXTRACTION OF CODESEARCHNET ROBUST DATASET
 def download_codesearchnet_robust(output_dir="Project/Datasets"):
+    """ Downloads and extracts the CodeSearchNet Robust dataset from a reliable source. """
 
     # Mirror on Hugging Face Assets - the most stable at the moment
     url = "https://huggingface.co/datasets/code_search_net/resolve/main/data/python.zip"
@@ -901,6 +1092,7 @@ import glob
 
 # GENERATE HUMAN-READABLE SAMPLES FOR DATA INSPECTION
 def save_human_readable_samples(datasets_dir="Project/Datasets", output_subdir="Human_readable_sample", num_examples=100):
+    """ Saves human-readable samples from the CodeSearchNet dataset for inspection. """
 
     # Define the full path for the folder and file
     full_output_dir = os.path.join(datasets_dir, output_subdir)
@@ -960,11 +1152,10 @@ from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 logger = logging.getLogger(__name__)
 
 # DATA PREPROCESSING 
+# Removes noise from docstrings (GIGO Principle). Takes only the first line and removes Sphinx/doctest tags.
 def clean_docstring(doc):
-    """
-    Removes noise from docstrings (GIGO Principle).
-    Takes only the first line and removes Sphinx/doctest tags.
-    """
+    """ Cleans a docstring by removing noise such as Sphinx/doctest tags and taking only the first line. """
+
     if not doc: return ""
 
     # 1. Take only the first part before an empty line or a period
@@ -980,6 +1171,7 @@ def clean_docstring(doc):
 
 # TOKENIZER TRAINING
 def train_bpe_tokenizer(files, save_path, vocab_size=20000):
+    """ Trains a Byte-Pair Encoding (BPE) tokenizer on the provided files and saves it. """
 
     # Initialize a Byte-Level BPE tokenizer
     tokenizer = Tokenizer(models.BPE(unk_token="<UNK>"))
@@ -993,16 +1185,18 @@ def train_bpe_tokenizer(files, save_path, vocab_size=20000):
     )
     
     logger.info(f"Training BPE Tokenizer (Vocab: {vocab_size})...")
+
     # Train the tokenizer on the provided files
-    tokenizer.train(files, trainer) #SIIUUUm
+    tokenizer.train(files, trainer)
+
     # Save the trained tokenizer to disk
     tokenizer.save(save_path)
 
 # PREPARE VOCABULARY FROM DATASET
+# Scans ONLY the Python data folder and extracts the clean corpus.
 def prepare_vocab(jsonl_base_dir, tokenizer_path):
-    """
-    Scans ONLY the Python data folder and extracts the clean corpus.
-    """
+    """ Prepares the BPE tokenizer vocabulary from the CodeSearchNet dataset. """
+    
     # Sandboxing: we target only the train folder of the extracted data
     search_pattern = os.path.join(jsonl_base_dir, "train", "*.jsonl.gz")
     train_files = glob.glob(search_pattern)
@@ -1052,7 +1246,7 @@ def prepare_vocab(jsonl_base_dir, tokenizer_path):
 ----------------------------------------------------------------------------------------------
 
 === DATASET PREVIEW - CODE SEARCH NET (PYTHON) ===
-Source File: C:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project\Datasets\python\final\jsonl\train\python_train_0.jsonl.gz
+Source File: c:\Users\matth\GitHub\Project_MLSA_MMA\Project\Datasets\python\final\jsonl\train\python_train_0.jsonl.gz
 
 --- SAMPLE #1 ---
 DOCSTRING: Trains a k-nearest neighbors classifier for face recognition.
@@ -4927,48 +5121,6 @@ def foldByKey(self, zeroValue, func, numPartitions=None, partitionFunc=portable_
 
 ================================================================================
 
---- FILE: README.md | PATH: Project\models\README.md ---
---------------------------------------------------------
-
-# Cartella `models`
-
-Questa cartella conterrà le definizioni di tutti i moduli PyTorch che compongono l'architettura del modello di deep learning.
-
-L'architettura di partenza sarà un modello **Sequence-to-Sequence (Seq2Seq)** con RNN (LSTM o GRU).
-
-## Implementazione Prevista
-
-1.  **Encoder (`encoder.py`):**
-    *   **Classe `Encoder(torch.nn.Module)`:**
-    *   **Componenti:**
-        *   `torch.nn.Embedding`: Per convertire gli indici dei token del codice sorgente in vettori densi (embedding).
-        *   `torch.nn.LSTM` o `torch.nn.GRU`: Per processare la sequenza di embedding e produrre un "vettore di contesto" (l'ultimo stato nascosto dell'RNN).
-    *   **Input:** Sequenza di token del codice sorgente.
-    *   **Output:** Output dell'RNN e stati nascosti/cella (il vettore di contesto).
-
-2.  **Decoder (`decoder.py`):**
-    *   **Classe `Decoder(torch.nn.Module)`:**
-    *   **Componenti:**
-        *   `torch.nn.Embedding`: Per i token del riassunto.
-        *   `torch.nn.LSTM` o `torch.nn.GRU`: Per generare la sequenza di output token per token.
-        *   `torch.nn.Linear`: Uno strato lineare finale per mappare lo stato nascosto dell'RNN a una distribuzione di probabilità sul vocabolario dei riassunti.
-        *   `torch.nn.LogSoftmax`: Per ottenere le probabilità logaritmiche.
-    *   **Input:** Il vettore di contesto dall'encoder e il token precedente della sequenza generata.
-    *   **Output:** La predizione del token successivo nella sequenza.
-
-3.  **Modello Principale (`seq2seq.py`):**
-    *   **Classe `Seq2Seq(torch.nn.Module)`:**
-    *   **Componenti:**
-        *   Un'istanza dell'Encoder.
-        *   Un'istanza del Decoder.
-    *   **Logica:**
-        *   Orchestra il flusso dei dati: prende la sequenza di input, la passa all'encoder, usa il vettore di contesto per inizializzare il decoder.
-        *   Implementa il ciclo di generazione del decoder.
-        *   Gestisce il "teacher forcing": durante il training, decide se alimentare il decoder con il token predetto o con il token reale della sequenza target, per stabilizzare l'addestramento.
-
-
-================================================================================
-
 --- FILE: attention.py | PATH: Project\models\attention.py ---
 --------------------------------------------------------------
 
@@ -4976,23 +5128,34 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# --- [ATTENTION MECHANISM CLASS] ---
 class Attention(nn.Module):
+
     def __init__(self, hid_dim):
+        """ Attention Mechanism initialization. """
+
         super().__init__()
+
+        # Linear layers for attention computation
         self.attn = nn.Linear(hid_dim * 2, hid_dim)
+
+        # Final linear layer to produce attention scores
         self.v = nn.Linear(hid_dim, 1, bias=False)
         
     def forward(self, hidden, encoder_outputs):
-        # hidden: [batch_size, hid_dim] (ultimo stato del decoder)
+        """ Forward pass for the attention mechanism. """
+
+        # hidden: [batch_size, hid_dim] (last state of the decoder)
         # encoder_outputs: [batch_size, src_len, hid_dim]
         src_len = encoder_outputs.shape[1]
         
-        # Ripeti hidden per ogni step temporale del sorgente
+        # Repeat hidden for each source time step
         hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
         
         attention = self.v(energy).squeeze(2)
-        # Softmax per ottenere una distribuzione di probabilità (somma = 1)
+        
+        # Softmax to obtain a probability distribution (sum = 1)
         return F.softmax(attention, dim=1)
 
 
@@ -5004,30 +5167,49 @@ class Attention(nn.Module):
 import torch
 import torch.nn as nn
 
+# --- [DECODER MODULE] ---
 class Decoder(nn.Module):
+
+    # Initialization of the Decoder
     def __init__(self, output_dim, emb_dim, hid_dim, n_layers, dropout, attention):
+        """ Initializes the Decoder module. """
         super().__init__()
         self.output_dim = output_dim
+
+        # Attention mechanism
         self.attention = attention
+
+        # Layers of the Decoder
         self.embedding = nn.Embedding(output_dim, emb_dim)
+
+        # LSTM layer
         self.rnn = nn.LSTM(emb_dim + hid_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
+
+        # Final output layer
         self.fc_out = nn.Linear(emb_dim + hid_dim * 2, output_dim)
+
+        # Dropout layer
         self.dropout = nn.Dropout(dropout)
-        
+    
+    # Forward pass of the Decoder
     def forward(self, input, hidden, cell, encoder_outputs):
-        # input: [batch_size] -> un singolo token (il precedente)
+        """ Performs a forward pass through the Decoder. """
+        
+        # input: [batch_size] -> a single token (the previous one)
         input = input.unsqueeze(1)
         embedded = self.dropout(self.embedding(input))
         
-        # Calcolo pesi di attenzione basati sull'ultimo hidden state
+        # Calculate attention weights based on the last hidden state
         a = self.attention(hidden[-1], encoder_outputs).unsqueeze(1)
-        # Prodotto scalare per ottenere il context vector: [batch_size, 1, hid_dim]
+
+        # Dot product to obtain the context vector: [batch_size, 1, hid_dim]
         weighted = torch.bmm(a, encoder_outputs)
         
+        #Concatenate embedded token with context vector on dim 2
         rnn_input = torch.cat((embedded, weighted), dim=2)
         output, (hidden, cell) = self.rnn(rnn_input, (hidden, cell))
         
-        # Uniamo tutto per la proiezione finale sul vocabolario
+        # Concatenate everything for the final projection on the vocabulary
         prediction = self.fc_out(torch.cat((output, weighted, embedded), dim=2))
         return prediction.squeeze(1), hidden, cell
 
@@ -5039,20 +5221,37 @@ class Decoder(nn.Module):
 import torch
 import torch.nn as nn
 
+# --- [ENCODER MODULE] ---
 class Encoder(nn.Module):
+
+    # Initialization of the Encoder
     def __init__(self, input_dim, emb_dim, hid_dim, n_layers, dropout):
+        """ Initializes the Encoder with embedding and LSTM layers. """
+
         super().__init__()
+
+        # Embedding layer: converts token indices to dense vectors
         self.embedding = nn.Embedding(input_dim, emb_dim)
-        # LSTM: gestisce le dipendenze temporali del codice
+
+        # LSTM: manages temporal dependencies in the code
         self.rnn = nn.LSTM(emb_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
+
+        # Dropout layer: regularization to prevent overfitting
         self.dropout = nn.Dropout(dropout)
         
+    # Forward pass of the Encoder
     def forward(self, src):
+        """ Forward pass through the Encoder. """
+
         # src: [batch_size, src_len]
+
+        # Apply embedding and dropout
         embedded = self.dropout(self.embedding(src))
+
+        # Pass through the RNN
         outputs, (hidden, cell) = self.rnn(embedded)
-        # outputs: [batch_size, src_len, hid_dim] -> usati dall'Attention
-        # hidden/cell: [n_layers, batch_size, hid_dim] -> stato finale compresso
+        # outputs: [batch_size, src_len, hid_dim] -> used by Attention
+        # hidden/cell: [n_layers, batch_size, hid_dim] -> compressed final state
         return outputs, hidden, cell
 
 ================================================================================
@@ -5068,56 +5267,63 @@ from models.decoder import Decoder
 from models.seq2seq import Seq2Seq
 from models.transformer import Seq2SeqTransformer # Assicurati che il file esista
 
+# Logger Configuration
 logger = logging.getLogger(__name__)
 
+# --- [ARCHITECTURE FACTORY FUNCTION] ---
 def get_model_architecture(model_type, device, vocab_size=50000, config=None):
     """
-    Architecture Factory: Genera istanze di modelli basate su tag.
-    Implementa il pattern Abstract Factory per isolare la topologia dagli iperparametri.
+    Architecture Factory: Generates instances of models based on tags.
+    Implements the Abstract Factory pattern to isolate topology from hyperparameters.
     """
     
-    # --- CONFIGURAZIONE DEFAULT (Override possibile tramite config) ---
-    # Usiamo un dizionario per mantenere l'ortogonalità
+    # --- DEFAULT CONFIGURATION (Override possible via config) ---
+    # Using a dictionary to maintain orthogonality
     params = {
         "emb_dim": 256,
         "hid_dim": 512,
         "n_layers": 2,
         "dropout": 0.5,
-        "nhead": 8,            # Solo per Transformer
-        "transformer_layers": 6 # Solo per Transformer
+        "nhead": 8,             # Only for Transformer
+        "transformer_layers": 6 # Only for Transformer
     }
     
-    # Se passiamo un oggetto config (da argparse), facciamo l'override
+    # If we pass a config object (from argparse), override defaults
     if config:
-        # Esempio: params["hid_dim"] = getattr(config, "hid_dim", params["hid_dim"])
+        # Example: params["hid_dim"] = getattr(config, "hid_dim", params["hid_dim"])
         pass
 
     if model_type == "lstm_attention":
-        logger.info(f"🏗️ Factory: Generazione LSTM-ATTN | Vocab: {vocab_size} | Hidden: {params['hid_dim']}")
+        logger.info(f"🏗️ Factory: Generating LSTM-ATTN | Vocab: {vocab_size} | Hidden: {params['hid_dim']}")
         
+        # Attention mechanism
         attn = Attention(params["hid_dim"])
+
+        # Encoder-Decoder with Attention
         enc = Encoder(vocab_size, params["emb_dim"], params["hid_dim"], params["n_layers"], params["dropout"])
         dec = Decoder(vocab_size, params["emb_dim"], params["hid_dim"], params["n_layers"], params["dropout"], attn)
         
+        # Seq2Seq Model
         return Seq2Seq(enc, dec, device).to(device)
 
     elif model_type == "transformer":
-        logger.info(f"⚡ Factory: Generazione Transformer | Heads: {params['nhead']} | Layers: {params['transformer_layers']}")
+        logger.info(f"⚡ Factory: Generating Transformer | Heads: {params['nhead']} | Layers: {params['transformer_layers']}")
         
-        # Implementazione Seq2SeqTransformer basata su PyTorch standard
+        # Implementation of Seq2SeqTransformer based on standard PyTorch
         model = Seq2SeqTransformer(
             vocab_size=vocab_size,
-            d_model=params["hid_dim"], # Spesso hid_dim e d_model coincidono nei Transformer base
+            d_model=params["hid_dim"], # Often hid_dim and d_model coincide in base Transformers
             nhead=params["nhead"],
             num_layers=params["transformer_layers"],
-            dropout=0.1 # I Transformer preferiscono dropout meno aggressivi delle LSTM
+            dropout=0.1 # Transformers prefer less aggressive dropout than LSTMs
         )
         
+        # Transformer Model
         return model.to(device)
 
     else:
-        logger.error(f"❌ Factory Failure: Tag '{model_type}' non riconosciuto.")
-        raise ValueError(f"Tag '{model_type}' non supportato dalla factory.")
+        logger.error(f"❌ Factory Failure: Tag '{model_type}' not recognized.")
+        raise ValueError(f"Tag '{model_type}' not supported by the factory.")
 
 ================================================================================
 
@@ -5128,32 +5334,56 @@ import torch
 import torch.nn as nn
 import random
 
+# --- [SEQ2SEQ MODULE] ---
 class Seq2Seq(nn.Module):
+
+    # Initialization of the Seq2Seq model
     def __init__(self, encoder, decoder, device):
+        """ Initializes the Seq2Seq model with encoder, decoder, and device. """
+
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
         
+    # Forward pass of the Seq2Seq model
     def forward(self, src, trg, teacher_forcing_ratio=0.5):
+        """ Forward pass through the Seq2Seq model. """
+        
         # src: [batch_size, src_len], trg: [batch_size, trg_len]
+
+        # Get the batch size from the source sequence
         batch_size = src.shape[0]
+
+        # Get the target sequence length
         trg_len = trg.shape[1]
+
+        # Vocabulary size of the target language
         trg_vocab_size = self.decoder.output_dim
         
+        # Initialize the outputs tensor to store decoder outputs
         outputs = torch.zeros(batch_size, trg_len, trg_vocab_size).to(self.device)
+
+        # Encode the source sequence
         encoder_outputs, hidden, cell = self.encoder(src)
         
-        # Il primo input al decoder è sempre il token <SOS>
+        # The first input to the decoder is always the <SOS> token
         input = trg[:, 0]
         
+        # Decode each token step by step
         for t in range(1, trg_len):
+
+            # Get the output from the decoder
             output, hidden, cell = self.decoder(input, hidden, cell, encoder_outputs)
             outputs[:, t] = output
             
-            # Logica Teacher Forcing: decidiamo se "imboccare" il modello con la verità
+            # Teacher Forcing logic: decide whether to "feed" the model with the truth
             teacher_force = random.random() < teacher_forcing_ratio
+
+            # Get the highest predicted token from our output
             top1 = output.argmax(1)
+
+            # If teacher forcing, use actual next token as next input; else use predicted token
             input = trg[:, t] if teacher_force else top1
             
         return outputs
@@ -5167,13 +5397,19 @@ import torch
 import torch.nn as nn
 import math
 
+# --- TRANSFORMER MODEL DEFINITION ---
 class PositionalEncoding(nn.Module):
     """
-    Inietta informazione sull'ordine dei token.
-    Senza questo, il Transformer tratterebbe il codice come un 'bag of words'.
+    Injects information about the order of tokens.
+    Without this, the Transformer would treat the code as a 'bag of words'.
     """
+    
+    # Positional Encoding Initialization
     def __init__(self, d_model, max_len=5000):
+        """ Initializes the PositionalEncoding module. """
         super().__init__()
+
+        # Creation of the matrix for positional encoding
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
@@ -5181,16 +5417,29 @@ class PositionalEncoding(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe.unsqueeze(0))
 
+    # Forward pass to add positional encoding to input embeddings
     def forward(self, x):
+        """ Adds positional encoding to input embeddings. """
+
         return x + self.pe[:, :x.size(1)]
 
+
+# --- SEQ2SEQ TRANSFORMER MODEL DEFINITION ---
 class Seq2SeqTransformer(nn.Module):
+    """ Seq2Seq Transformer Model for code generation tasks. """
+
+    # Initialization of the Transformer model
     def __init__(self, vocab_size, d_model=512, nhead=8, num_layers=6, dim_feedforward=2048, dropout=0.1):
+        """ Initializes the Seq2SeqTransformer model. """
+
         super().__init__()
+
+        # Model components
         self.model_type = 'Transformer'
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
         
+        # Transformer block
         self.transformer = nn.Transformer(
             d_model=d_model,
             nhead=nhead,
@@ -5201,86 +5450,51 @@ class Seq2SeqTransformer(nn.Module):
             batch_first=True 
         )
         
+        # Final linear layer to project to vocabulary size
         self.fc_out = nn.Linear(d_model, vocab_size)
         self.d_model = d_model
 
+    # Causal mask generation
     def _generate_causal_mask(self, sz, device):
-        """Impedisce al decoder di sbirciare i token futuri (Look-ahead mask)."""
+        """ Prevents the decoder from peeking at future tokens (Look-ahead mask). """
+
+        # Create a square matrix of size sz x sz
         mask = (torch.triu(torch.ones(sz, sz, device=device)) == 1).transpose(0, 1)
+
+        # Convert boolean mask to float with -inf and 0.0
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
+    # Forward pass of the Transformer model
     def forward(self, src, trg, teacher_forcing_ratio=None, **kwargs):
         """
-        Ingegneria delle Maschere:
-        1. Causal Mask: Impedisce di vedere il futuro nel target.
-        2. Padding Mask: Impedisce di dare importanza ai token <PAD> (ID 0).
+        Mask Engineering:
+        1. Causal Mask: Prevents seeing the future in the target.
+        2. Padding Mask: Prevents giving importance to <PAD> tokens (ID 0).
         """
-        # Creazione maschere di padding (True dove c'è PAD)
+        
+        # Creation of padding masks (True where PAD)
         src_padding_mask = (src == 0)
         tgt_padding_mask = (trg == 0)
         
-        # Generazione maschera causale per il training parallelo
+        # Creation of causal mask for parallel training
         tgt_mask = self._generate_causal_mask(trg.size(1), src.device)
         
-        # Embedding + Scaling (Standard per Transformer stability)
+        # Embedding + Scaling (Standard for Transformer stability)
         src_emb = self.pos_encoder(self.embedding(src) * math.sqrt(self.d_model))
         tgt_emb = self.pos_encoder(self.embedding(trg) * math.sqrt(self.d_model))
         
-        # Esecuzione del blocco Transformer con iniezione di tutte le maschere
+        # Execution of the Transformer block with injection of all masks
         output = self.transformer(
             src_emb, 
             tgt_emb, 
             tgt_mask=tgt_mask,
             src_key_padding_mask=src_padding_mask,
             tgt_key_padding_mask=tgt_padding_mask,
-            memory_key_padding_mask=src_padding_mask # Il decoder ignora il padding dell'encoder
+            memory_key_padding_mask=src_padding_mask # The decoder ignores the encoder's padding
         )
         
         return self.fc_out(output)
-
-================================================================================
-
---- FILE: README.md | PATH: Project\scripts\README.md ---
----------------------------------------------------------
-
-# Cartella `scripts`
-
-Questa cartella conterrà gli script eseguibili per lanciare le operazioni principali del progetto: addestramento, valutazione e inferenza.
-
-## Implementazione Prevista
-
-1.  **Script di Addestramento (`train.py`):**
-    *   **Responsabilità:** Gestire l'intero ciclo di vita dell'addestramento del modello.
-    *   **Logica:**
-        1.  Caricare i dati di training e validazione usando i `DataLoader` definiti in `data/`.
-        2.  Inizializzare il modello (es. `Seq2Seq`), l'ottimizzatore (es. `Adam`) e la funzione di loss (`NLLLoss` o `CrossEntropyLoss` con `ignore_index` per il padding).
-        3.  Eseguire il ciclo di training per un numero definito di `epoch`.
-        4.  Per ogni `epoch`:
-            *   Iterare sui batch di training, calcolare la loss, eseguire backpropagation e aggiornare i pesi.
-            *   Eseguire un ciclo di validazione per monitorare le performance su dati non visti.
-            *   Salvare i "checkpoint" del modello, specialmente quello con la migliore performance sul validation set.
-        5.  (Opzionale) Loggare le metriche (es. loss, perplessità) usando `TensorBoard` o tool simili.
-
-2.  **Script di Valutazione (`evaluate.py`):**
-    *   **Responsabilità:** Valutare quantitativamente un modello addestrato sul test set.
-    *   **Logica:**
-        1.  Caricare il `DataLoader` del test set.
-        2.  Caricare il modello migliore salvato dallo script di training.
-        3.  Iterare sul test set in modalità `torch.no_grad()`.
-        4.  Per ogni coppia (codice, riassunto reale), generare un riassunto predetto dal modello.
-        5.  Calcolare e riportare le metriche di valutazione richieste: **BLEU** e **ROUGE**.
-
-3.  **Script di Inferenza (`summarize.py`):**
-    *   **Responsabilità:** Usare il modello addestrato per generare un riassunto di un nuovo snippet di codice fornito dall'utente.
-    *   **Logica:**
-        1.  Accettare uno snippet di codice come argomento da linea di comando.
-        2.  Caricare il modello addestrato, i vocabolari e i tokenizer.
-        3.  Applicare lo stesso preprocessing dell'addestramento al codice di input.
-        4.  Eseguire il forward pass del modello (inferenza) per generare la sequenza di indici dei token del riassunto.
-        5.  Decodificare la sequenza di indici in una stringa di testo leggibile.
-        6.  Stampare a schermo il riassunto generato.
-
 
 ================================================================================
 
@@ -5294,54 +5508,72 @@ import json
 import time
 from datetime import datetime
 
+# --- [LOGGING AND TELEMETRY MANAGER] ---
 class ExecutionLogger:
+    """ Manages detailed logging and telemetry for model training and evaluation. """
+
+    # Initialization of the logger
     def __init__(self, root_dir, model_tag, subset_size=None):
+        """ Initializes the Execution Logger. """
+
         self.start_time = datetime.now()
+
+        # Tag that identifies the model architecture
         self.model_tag = model_tag
+
+        # Subset size used during training
         self.subset_size = subset_size if subset_size else "ALL"
         
-        # Directory di salvataggio
+        # Directory for saving logs
         self.log_dir = os.path.join(root_dir, "logs")
         os.makedirs(self.log_dir, exist_ok=True)
         
-        # Nome temporaneo (verrà rinominato nel finalize)
+        # Temporary filename (will be renamed in finalize)
         self.temp_name = f"exec_{self.start_time.strftime('%Y%m%d_%H%M%S')}.tmp"
         self.file_path = os.path.join(self.log_dir, self.temp_name)
         
-        # Struttura Dati Interna (JSON Ready)
+        # Internal Data Structure (JSON Ready)
         self.data = {
             "metadata": {
                 "model_type": model_tag,
                 "subset": self.subset_size,
                 "start_time": self.start_time.isoformat()
             },
-            "durations": {}, # Fase -> "Xs"
+            "durations": {}, # Phase -> "Xs"
             "infrastructure": {},
             "training_history": [],
             "evaluation": {}
         }
 
+    # Fingerprints hardware per telemetric audit.
     def log_sys_info(self):
-        """Fingerprint hardware per audit telemetrico."""
+        """ Logs system information such as OS, Python version, and GPU details. """
+
+        # System Information
         info = {
             "os": platform.system(),
             "python": platform.python_version(),
             "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"
         }
+
         if torch.cuda.is_available():
             info["vram_total"] = f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
             
         self.data["infrastructure"] = info
         self._write_to_file(f"--- INFRASTRUCTURE ---\n{json.dumps(info, indent=4)}\n")
 
+    # Logs the duration of a macro-phase (e.g., data loading).
     def log_phase(self, phase_name, duration_seconds):
-        """Registra la durata di una macro-fase (es. caricamento dati)."""
+        """ Logs the duration of a macro-phase (e.g., data loading). """
+
         dur_str = f"{duration_seconds:.2f}s"
         self.data["durations"][phase_name] = dur_str
         self._write_to_file(f"[TIMER] Phase '{phase_name}' completed in {dur_str}\n")
 
+    # Details about the tokenizer pipeline.
     def log_tokenizer_info(self, vocab_size, reused=True, duration=0):
-        """Dettagli sulla pipeline del vocabolario."""
+        """ Logs details about the tokenizer pipeline. """
+
         tok_info = {
             "vocab_size": vocab_size,
             "status": "REUSED" if reused else "NEWLY_TRAINED",
@@ -5350,8 +5582,10 @@ class ExecutionLogger:
         self.data["metadata"]["tokenizer"] = tok_info
         self._write_to_file(f"--- TOKENIZER ---\n{json.dumps(tok_info, indent=4)}\n")
 
+    # Granular logging for each training epoch.
     def log_epoch(self, epoch, train_loss, val_loss, lr, epoch_duration):
-        """Log granulare per ogni epoca di addestramento."""
+        """ Granular logging for each training epoch. """
+
         entry = {
             "epoch": epoch,
             "train_loss": train_loss,
@@ -5365,22 +5599,28 @@ class ExecutionLogger:
             f"LR: {lr:.6f} | Time: {epoch_duration:.2f}s\n"
         )
 
+    # Logs the final evaluation metrics after training.
     def log_final_metrics(self, df_metrics, mode="fast"):
-        """Salva i risultati dell'audit post-training."""
+        """Logs the final evaluation metrics after training. """
+
         metrics = df_metrics.to_dict(orient='records')[0] if df_metrics is not None and not df_metrics.empty else {}
         metrics["eval_mode"] = mode
         self.data["evaluation"] = metrics
         self._write_to_file(f"\n--- FINAL EVALUATION ({mode.upper()}) ---\n{json.dumps(metrics, indent=4)}\n")
 
+    # Finalizes the logging by renaming the file with a timestamp prefix.
+    # Renames the file with an ISO 8601 chronological prefix for LIFO ordering.
     def finalize(self):
-        """Rinomina il file con prefisso cronologico ISO 8601 per ordinamento LIFO."""
+        """Renames the file with an ISO 8601 chronological prefix for LIFO ordering. """
+
         end_time = datetime.now()
         total_duration = end_time - self.start_time
         self.data["durations"]["total_execution"] = str(total_duration)
         
-        # Estrazione Metriche per lo Slug
+        # Extraction of Metrics for the Slug
         bleu = self.data["evaluation"].get("bleu", 0)
-        # Se il BLEU è quasi zero o assente, usiamo NA
+        
+        # If BLEU is almost zero or absent, use NA
         bleu_tag = f"B{bleu:.2f}" if bleu > 0.0001 else "NA"
         
         # Naming Slug: 20260125_143022_TRANS_S50000_B0.25
@@ -5393,24 +5633,27 @@ class ExecutionLogger:
         final_path_log = os.path.join(self.log_dir, f"{final_name}.log")
         final_path_json = os.path.join(self.log_dir, f"{final_name}.json")
 
-        # Scrittura finale riassuntiva
+        # Final summary write
         self._write_to_file(f"\n--- ALL PHASE DURATIONS ---\n{json.dumps(self.data['durations'], indent=4)}\n")
         self._write_to_file(f"\n--- FINISHED ---\nTotal Duration: {total_duration}\n")
         
         try:
-            # Chiusura e rinomina (Atomic Move)
+            # Closing and renaming (Atomic Move)
             if os.path.exists(self.file_path):
                 os.rename(self.file_path, final_path_log)
             
-            # Export dei metadati in JSON per analisi future (es. grafici)
+            # Export metadata in JSON for future analysis (e.g., graphs)
             with open(final_path_json, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, indent=4)
                 
-            print(f"✅ Log Archiviato: {os.path.basename(final_path_log)}")
+            print(f"✅ Log Saved: {os.path.basename(final_path_log)}")
         except Exception as e:
-            print(f"⚠️ Errore critico in fase di archiviazione log: {e}")
+            print(f"⚠️ Critical error during log archiving: {e}")
 
+    # Internal method to append text to the log file.
     def _write_to_file(self, text):
+        """ Appends text to the log file. """
+
         with open(self.file_path, "a", encoding="utf-8") as f:
             f.write(text)
 
@@ -5426,136 +5669,150 @@ import logging
 import time # Indispensabile per il profiling
 from tqdm import tqdm
 
+# Logger Configuration
 logger = logging.getLogger(__name__)
 
+# --- [TRAINING FUNCTION] ---
 def train_model(model, train_loader, valid_loader, config, device, telemetry=None):
-    # --- [FASE 0] AUDIT HARDWARE ---
+    """ Trains the model for a specified number of epochs using the provided data loaders and configuration. """
+
+    # --- [PHASE 0] AUDIT HARDWARE ---
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"🚀 TRAINING START | Params: {total_params:,} | Device: {device}")
 
+    # DataLoader length check
     steps_per_epoch = len(train_loader)
     if steps_per_epoch == 0:
-        raise ValueError("❌ Il train_loader è vuoto.")
+        raise ValueError("❌ The train_loader is empty.")
 
+    # --- [PHASE 1] OPTIMIZER AND CRITERION CONFIGURATION ---
+
+    # Loss function with label smoothing
     criterion = nn.CrossEntropyLoss(ignore_index=0, label_smoothing=0.1)
+
+    # Optimizer configuration
     optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=0.01)
 
-    # Configurazione OneCycleLR con protezione per piccoli subset
+    # OneCycleLR configuration with protection for small subsets
     total_steps = config.epochs * steps_per_epoch
     if total_steps < 2:
         scheduler = None
     else:
+        # Learning rate scheduler
         scheduler = optim.lr_scheduler.OneCycleLR(
             optimizer, max_lr=0.0005, steps_per_epoch=steps_per_epoch, 
             epochs=config.epochs, pct_start=0.3
         )
     
-    scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
-    best_valid_loss = float('inf')
+    # --- [PHASE 2] TRAINING LOOP ---
 
+    # Mixed precision scaler
+    scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
+
+    # Best validation loss tracker
+    best_valid_loss = float('inf')
+ 
+    # Epoch loop
     for epoch in range(config.epochs):
-        epoch_start_time = time.time() # ⏱️ START TIMER EPOCA
+        epoch_start_time = time.time() # START TIMER EPOCH
         model.train()
         train_loss = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.epochs}")
         
         for src, trg in pbar:
             src, trg = src.to(device, non_blocking=True), trg.to(device, non_blocking=True)
+            
+            # --- FORWARD AND BACKWARD PASS ---
+
+            # Clear gradients
             optimizer.zero_grad(set_to_none=True)
 
+            # Forward pass with mixed precision
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
                 tf_ratio = max(0.2, 0.5 - (epoch * 0.1)) 
                 output = model(src, trg, teacher_forcing_ratio=tf_ratio)
                 output_dim = output.shape[-1]
                 loss = criterion(output[:, 1:].reshape(-1, output_dim), trg[:, 1:].reshape(-1))
 
+            # Backward pass and optimization step
             if scaler:
+                # Mixed precision backward pass
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
             else:
+                # Standard backward pass
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
+            # Scheduler step
             if scheduler:
                 scheduler.step()
 
+            # --- END BATCH: UPDATE METRICS AND PROGRESS BAR ---
             train_loss += loss.item()
             current_lr = optimizer.param_groups[0]['lr']
             pbar.set_postfix(loss=f"{loss.item():.4f}", lr=f"{current_lr:.6f}")
 
-        # --- FINE EPOCA: CALCOLO METRICHE E TEMPI ---
-        epoch_duration = time.time() - epoch_start_time # ⏱️ STOP TIMER EPOCA
+        # --- END EPOCH: CALCULATE METRICS AND TIMING ---
+        epoch_duration = time.time() - epoch_start_time # ⏱️ STOP TIMER EPOCH
         avg_train_loss = train_loss / steps_per_epoch
         valid_loss = evaluate_validation(model, valid_loader, criterion, device)
         
-        # --- [TELEMETRIA] Chiamata aggiornata con epoch_duration ---
+        # --- [TELEMETRY] Updated call with epoch_duration ---
         if telemetry:
             telemetry.log_epoch(
                 epoch=epoch + 1, 
                 train_loss=avg_train_loss, 
                 val_loss=valid_loss, 
                 lr=current_lr, 
-                epoch_duration=epoch_duration # Il parametro mancante
+                epoch_duration=epoch_duration # The missing parameter
             )
         
+        # --- [LOGGING] EPOCH SUMMARY ---
         status_msg = f"Epoch {epoch+1} | Loss: {avg_train_loss:.4f} | Val: {valid_loss:.4f} | Time: {epoch_duration:.2f}s"
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
             status_msg += " 🔥 [NEW BEST]"
         
+        # Log epoch summary
         logger.info(status_msg)
 
+# --- [VALIDATION FUNCTION] ---
 def evaluate_validation(model, loader, criterion, device):
+    """ Evaluates the model on the validation set and returns the average loss. """
+
+    # Set model to evaluation mode
     model.eval()
+
+    # Initialize loss accumulator
     epoch_loss = 0
+
+    # Calculate number of batches
     num_batches = len(loader)
-    if num_batches == 0: return 0
+
+    # Guard against empty loader to avoid division by zero
+    if num_batches == 0: return 0   
+
+    # Evaluate without gradient calculation
     with torch.no_grad():
         for src, trg in loader:
             src, trg = src.to(device), trg.to(device)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+
+                # Forward pass
                 output = model(src, trg, teacher_forcing_ratio=0)
+                
+                # Calculate loss
                 output_dim = output.shape[-1]
                 loss = criterion(output[:, 1:].reshape(-1, output_dim), trg[:, 1:].reshape(-1))
                 epoch_loss += loss.item()
+
+    # Return average loss over all batches
     return epoch_loss / num_batches
-
-================================================================================
-
---- FILE: README.md | PATH: Project\src\README.md ---
------------------------------------------------------
-
-# Cartella `src`
-
-Questa cartella è pensata per contenere il codice sorgente riutilizzabile e le logiche di base che non rientrano specificamente nelle categorie `data`, `models` o `scripts`.
-
-Può essere vista come una libreria interna del progetto.
-
-## Implementazione Prevista
-
-Il contenuto di questa cartella emergerà durante lo sviluppo, ma potrebbe includere:
-
-1.  **Funzioni di Utilità (`utils.py`):**
-    *   Funzioni generiche che possono essere utili in più punti del progetto.
-    *   Esempi:
-        *   Funzioni per calcolare il tempo di esecuzione.
-        *   Funzioni per impostare il seed per la riproducibilità degli esperimenti (`set_seed`).
-        *   Classi per il logging custom.
-
-2.  **Gestione della Configurazione (`config.py`):**
-    *   Un modulo per caricare e gestire i parametri di configurazione del progetto (es. da file YAML o JSON).
-    *   Questo centralizza iperparametri come `learning_rate`, `batch_size`, `hidden_size`, percorsi dei file, ecc., rendendo gli esperimenti più facili da tracciare e modificare.
-
-3.  **Logica di Calcolo Metriche (`metrics.py`):**
-    *   Wrapper o implementazioni custom per le metriche di valutazione come BLEU e ROUGE, se la logica diventa complessa e si vuole disaccoppiarla dallo script `evaluate.py`.
-
-4.  **Componenti Condivisi del Modello:**
-    *   Se si sviluppano architetture più complesse (es. Transformer), qui si potrebbero definire i blocchi base riutilizzabili, come lo strato di `Multi-Head Attention` o `Position-wise Feed-Forward Network`, se non si vogliono tenere nei file principali dei modelli.
-
 
 ================================================================================
 
