@@ -165,7 +165,10 @@ class CodeSummarizationPipeline:
             try:
                 # Converts "1,2,4" into list indices [0, 1, 3]
                 indices = [int(i.strip()) - 1 for i in self.config.neval.split(",")]
+
+                # Select corresponding checkpoints
                 targets = [all_ckpts[i] for i in indices if 0 <= i < len(all_ckpts)]
+                
             except (ValueError, IndexError) as e:
                 logger.error(f"❌ Error in --neval format '{self.config.neval}': {e}")
                 return
