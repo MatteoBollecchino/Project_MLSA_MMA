@@ -83,6 +83,7 @@ class CodeSummaryDataset(Dataset):
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
         self.eos_id = self.tokenizer.token_to_id("<EOS>")
 
+        # Locate all relevant files in the specified split directory
         search_pattern = os.path.join(data_dir, split_type, "*.jsonl.gz")
         files = glob.glob(search_pattern)
         
@@ -121,6 +122,7 @@ class CodeSummaryDataset(Dataset):
                                 code_tensor = torch.tensor([self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id])
                                 doc_tensor = torch.tensor([self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id])
                                 
+                                # Append to in-RAM cache
                                 self.data.append((code_tensor, doc_tensor))
                         
                         # Subset management (for quick debugging)
