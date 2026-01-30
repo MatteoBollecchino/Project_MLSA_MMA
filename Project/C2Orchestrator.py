@@ -248,7 +248,7 @@ class CodeSummarizationPipeline:
 if __name__ == "__main__":
 
     # Declaration of the parser for command line arguments
-    parser = argparse.ArgumentParser(description="C2 Orchestrator - Project CASS Pipeline")
+    parser = argparse.ArgumentParser(description="C2 Orchestrator - Project Pipeline")
     
     # Modality switch of the pipeline (train / eval)
     parser.add_argument("--mode", type=str, default="train", choices=["train", "eval"], 
