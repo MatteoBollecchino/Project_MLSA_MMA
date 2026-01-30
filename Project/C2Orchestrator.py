@@ -202,43 +202,39 @@ class CodeSummarizationPipeline:
 if __name__ == "__main__":
 
     # Declaration of the parser for command line arguments
-    parser = argparse.ArgumentParser(description="C2 Orchestrator - Pipeline")
+    parser = argparse.ArgumentParser(description="C2 Orchestrator - Project CASS Pipeline")
     
     # Modality switch of the pipeline (train / eval)
     parser.add_argument("--mode", type=str, default="train", choices=["train", "eval"], 
                         help="Choose 'train' to train a new model or 'eval' to audit existing checkpoints")
     
-    # Model parameters & Training
-    parser.add_argument("--model", type=str, choices=["transformer", "lstm_attention"], 
-                        help="Architecture (Required only in --mode train)")
+    # --- MODEL PARAMETERS & TRAINING ---
+    # Aggiornato per riflettere la separazione delle logiche di Attention
+    parser.add_argument("--model", type=str, 
+                        choices=["transformer", "lstm_bahdanau", "lstm_dotproduct"], 
+                        help="Architecture selection: 'transformer' (High-Parallel), "
+                             "'lstm_bahdanau' (Additive/Learned), "
+                             "'lstm_dotproduct' (Multiplicative/Professor's version)")
+    
     parser.add_argument("--subset", type=int, default=None, help="Training dataset size")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=128)
     
-    # Audit / Evaluation parameters
+    # --- AUDIT / EVALUATION PARAMETERS ---
     parser.add_argument("--neval", type=str, default="1", 
-                        help="'all' for all checkpoints, or comma-separated indices (e.g., 1,2,4) based on reverse chronological order")
+                        help="'all' for all checkpoints, or comma-separated indices (e.g., 1,2,4) "
+                             "based on reverse chronological order")
     
-    # Evaluation depth parameter
     parser.add_argument("--evaluation", type=str, default="fast", choices=["instant", "fast", "deep"], 
                         help="Depth of evaluation (100, 200, 1000 samples)")
 
-    # INFRASTRUCTURE FLAGS
-    # Force re-download of the dataset
-    parser.add_argument("--force_download", action="store_true")
-
-    # Force re-preprocessing of the dataset (vocab + tokenization)
-    parser.add_argument("--force_preprocess", action="store_true")
-
-    # Deprecated flag for compatibility
-    parser.add_argument("--skip_train", action="store_true", help="Old flag for compatibility, prefer --mode eval")
+    # --- INFRASTRUCTURE FLAGS ---
+    parser.add_argument("--force_download", action="store_true", help="Force re-download of dataset")
+    parser.add_argument("--force_preprocess", action="store_true", help="Force re-creation of BPE vocabulary")
+    parser.add_argument("--force_train", action="store_true", help="Overwrite existing checkpoint if naming matches")
     
     # Parsing of arguments
     args = parser.parse_args()
-    
-    # Override for compatibility if the user still uses --skip_train
-    if args.skip_train:
-        args.mode = "eval"
 
     # Declaration and execution of the pipeline
     pipeline = CodeSummarizationPipeline(args)
