@@ -29,21 +29,35 @@ class Seq2SeqTransformer(nn.Module):
         self.d_model = d_model
 
     def _generate_causal_mask(self, sz, device):
-        mask = (torch.triu(torch.ones(sz, sz, device=device)) == 1).transpose(0, 1)
-        return mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        """
+        Risoluzione Problema 2: Genera una maschera booleana coerente.
+        In PyTorch, per le maschere booleane:
+        True = NON guardare (mask out)
+        False = guarda (keep)
+        """
+        # torch.triu con diagonal=1 crea una matrice con True sopra la diagonale principale
+        mask = torch.triu(torch.ones(sz, sz, device=device), diagonal=1).bool()
+        return mask
 
     def forward(self, src, trg, **kwargs):
+        # Maschere di padding booleane (True dove c'è l'ID 0)
         src_padding_mask = (src == 0)
         tgt_padding_mask = (trg == 0)
+        
+        # Maschera causale booleana (True per i token futuri)
         tgt_mask = self._generate_causal_mask(trg.size(1), src.device)
         
         src_emb = self.pos_encoder(self.embedding(src) * math.sqrt(self.d_model))
         tgt_emb = self.pos_encoder(self.embedding(trg) * math.sqrt(self.d_model))
         
+        # Ora tutte le maschere sono di tipo Bool: il sistema è omogeneo
         output = self.transformer(
-            src_emb, tgt_emb, tgt_mask=tgt_mask,
+            src_emb, 
+            tgt_emb, 
+            tgt_mask=tgt_mask,
             src_key_padding_mask=src_padding_mask,
             tgt_key_padding_mask=tgt_padding_mask,
             memory_key_padding_mask=src_padding_mask
         )
+        
         return self.fc_out(output)
