@@ -9,12 +9,13 @@ from tokenizers import Tokenizer
 # Importing project modules
 from data.download_dataset import download_codesearchnet_robust
 from data.inspect_dataset import save_human_readable_samples
-from data.preprocess import prepare_vocab
+from data.tokenizer import build_tokenizer
 from data.dataset import get_dataloader
 from models.factory import get_model_architecture
 from scripts.train import train_model 
 from scripts.log_manager import ExecutionLogger 
 from evaluate import BatchEvaluator 
+from data.dataset_cleaner import DatasetCleaner
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -76,7 +77,19 @@ class CodeSummarizationPipeline:
             download_codesearchnet_robust(self.dataset_root)
 
         # Save human-readable samples for inspection
-        save_human_readable_samples(self.dataset_root, "Human_readable_sample")
+        output_dir = os.path.join(self.dataset_root, "Human_readable_sample")
+        save_human_readable_samples(self.jsonl_base, output_dir, "data_preview_raw.txt")
+        telemetry.log_phase("data_infrastructure", time.time() - t0)
+
+        # Dataset cleaning
+        cleaner = DatasetCleaner()
+        output_dir = os.path.join(self.dataset_root, "processed")
+        cleaner.run(self.jsonl_base, output_dir)
+
+        # Save human-readable samples for inspection
+        input_dir = os.path.join(self.dataset_root, "processed")
+        output_dir = os.path.join(self.dataset_root, "Human_readable_sample")
+        save_human_readable_samples(input_dir, output_dir, "data_preview_processed.txt")
         telemetry.log_phase("data_infrastructure", time.time() - t0)
 
         # PHASE 2: TOKENIZER
@@ -87,7 +100,7 @@ class CodeSummarizationPipeline:
 
         if not reused:
             # Tokenizer's Vocabulary creation
-            prepare_vocab(self.jsonl_base, self.tokenizer_path)
+            build_tokenizer(self.jsonl_base, self.tokenizer_path, vocab_size=20000)
         tokenizer_duration = time.time() - t0
         
         # Load tokenizer and get vocabulary size

@@ -4,6 +4,8 @@ import gzip
 import glob
 import re
 
+# FILE NON FUNZIOALE: solo per ispezionare il contenuto temporaneo
+
 # --- CONFIGURAZIONE ---
 # Sostituisci con il percorso dove hai salvato le cartelle (es. "python", "java", etc.)
 JSONL_BASE_DIR = "Project/Datasets/python/final/jsonl" 
