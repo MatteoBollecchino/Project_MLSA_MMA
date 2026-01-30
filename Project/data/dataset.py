@@ -4,49 +4,15 @@ from torch.nn.utils.rnn import pad_sequence
 import json
 import gzip
 import os
-import glob
-import re
-import hashlib
 import multiprocessing
-from tqdm import tqdm
 from tokenizers import Tokenizer
 
-# --- [PHASE 1] DATA SANITIZATION & INTEGRITY (Principio GIGO) ---
-
-def clean_docstring(doc):
-    """
-    Applys a semantic filter.
-    Removes technical 'noise' (documentation tags, tests) to leave
-    only the logical description of the function.
-    """
-    if not doc: return ""
-
-    # Take only the first line: this is where the essence (Headline) resides
-    first_line = doc.split('\n\n')[0].split('\n')[0]
-    
-    # Regex to amputate Sphinx/Google-style tags (:param, @return, etc.)
-    clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
-    
-    # Remove residues of interactive tests (doctest)
-    clean = re.sub(r'>>>.*', '', clean)
-
-    return clean.strip()
-
-def compute_content_hash(code, doc):
-    """
-    Generates a SHA-256 'fingerprint' for atomic deduplication.
-    Prevents the model from cheating by memorizing duplicate samples.
-    """
-    # Normalize spaces to prevent formatting from affecting the hash
-    normalized = (re.sub(r'\s+', '', code) + doc).encode('utf-8')
-    return hashlib.sha256(normalized).hexdigest()
-
-
-# --- [PHASE 2] OPTIMIZED COLLATOR (Dynamic Padding) ---
-
+# --- [PHASE 1] OPTIMIZED COLLATOR (Dynamic Padding) ---
+# (Questa parte rimane identica ed è eccellente)
 class SmartCollator:
     """
     Transforms a list of samples into a mathematically coherent Batch.
+    Uses Dynamic Padding to minimize computation.
     """
     def __init__(self, pad_id):
         self.pad_id = pad_id
@@ -56,98 +22,100 @@ class SmartCollator:
         code_seqs, doc_seqs = zip(*batch)
 
         # [OPTIMIZATION] Dynamic Padding:
-        # Instead of padding everything to 256, we pad only up to the length 
-        # of the current batch's maximum. This speeds up Attention by orders of magnitude.
+        # Pad only to the longest sequence in THIS batch, not the global max.
         code_padded = pad_sequence(code_seqs, batch_first=True, padding_value=self.pad_id)
         doc_padded = pad_sequence(doc_seqs, batch_first=True, padding_value=self.pad_id)
 
         return code_padded, doc_padded
 
 
-# --- [PHASE 3] ASYMMETRIC CACHING ENGINE (Dataset Core) ---
+# --- [PHASE 2] STREAMLINED DATASET (Consumer Mode) ---
 
 class CodeSummaryDataset(Dataset):
     """
-    The data warehouse. Implements in-RAM caching to eliminate
-    filesystem latency during the training loop.
+    Lean & Mean Dataset Class.
+    Since data is already preprocessed (cleaned, deduped, filtered),
+    this class focuses purely on Tokenization and RAM Caching.
     """
     def __init__(self, data_dir, split_type, tokenizer_path, max_len_code=256, max_len_doc=64, subset=None):
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.max_len_code = max_len_code
         self.max_len_doc = max_len_doc
         self.data = []
-        self.seen_hashes = set()
 
-        # Extract special IDs to avoid repeated calls to the tokenizer
+        # Extract special IDs to avoid repeated lookups
         self.pad_id = self.tokenizer.token_to_id("<PAD>")
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
         self.eos_id = self.tokenizer.token_to_id("<EOS>")
 
-        # Locate all relevant files in the specified split directory
-        search_pattern = os.path.join(data_dir, split_type, "*.jsonl.gz")
-        files = glob.glob(search_pattern)
+        # Direct path to the preprocessed file (e.g., processed/train.jsonl.gz)
+        file_path = os.path.join(data_dir, f"{split_type}.jsonl.gz")
         
-        if not files:
-            raise FileNotFoundError(f"❌ Data source not found: {search_pattern}")
-        print(f"🔍 [MEM_CACHE] Loading and Tokenizing '{split_type}'...")
-
-        for file_path in files:
-            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-                for line in f:
-                    try:
-                        item = json.loads(line)
-
-                        #Try different keys to access each field to accomodate for many versions of dataset
-                        code = item.get('code', item.get('func_code_string', ''))
-                        doc = item.get('docstring', item.get('func_documentation_string', ''))
-                        
-                        #Clears doc from quotation marks and other characters
-                        clean_doc = clean_docstring(doc)
-                        
-                        # Quality Filter: exclude fragments that are too short or too long
-                        if len(clean_doc) > 10 and 10 < len(code.split()) < 250:
-                            f_hash = compute_content_hash(code, clean_doc)
-                            
-                            # Deduplication
-                            if f_hash not in self.seen_hashes:
-                                self.seen_hashes.add(f_hash)
-                                
-                                # --- [CRITICAL] TOKENIZATION UPFRONT ---
-                                # Perform the text -> numbers transformation HERE.
-                                # This frees the CPU during actual training.
-                                c_tokens = self.tokenizer.encode(code).ids
-                                d_tokens = self.tokenizer.encode(clean_doc).ids
-                                
-                                # Assemble tensor with Start-of-Sequence and End-of-Sequence
-                                code_tensor = torch.tensor([self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id])
-                                doc_tensor = torch.tensor([self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id])
-                                
-                                # Append to in-RAM cache
-                                self.data.append((code_tensor, doc_tensor))
-                        
-                        # Subset management (for quick debugging)
-                        if subset and len(self.data) >= subset: break
-                    except: continue
-                if subset and len(self.data) >= subset: break
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"❌ Processed data not found: {file_path}")
         
+        print(f"🔍 [MEM_CACHE] Loading processed '{split_type}' data...")
+
+        # --- FAST LOADING LOOP ---
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    item = json.loads(line)
+                    
+                    # Direct access: Data is guaranteed to have these keys by DatasetCleaner
+                    code = item.get('code', '')
+                    doc = item.get('docstring', '')
+                    
+                    if not code or not doc: continue
+
+                    # --- TOKENIZATION ---
+                    # Transform text to integers using the pre-trained BPE tokenizer
+                    c_tokens = self.tokenizer.encode(code).ids
+                    d_tokens = self.tokenizer.encode(doc).ids
+                    
+                    # --- TENSORIZATION & TRUNCATION ---
+                    # We still truncate here to ensure GPU memory safety, 
+                    # even if the cleaner filtered by word count.
+                    
+                    # Create Code Tensor: [SOS] + tokens + [EOS]
+                    code_ids = [self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id]
+                    code_tensor = torch.tensor(code_ids, dtype=torch.long)
+                    
+                    # Create Doc Tensor: [SOS] + tokens + [EOS]
+                    doc_ids = [self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id]
+                    doc_tensor = torch.tensor(doc_ids, dtype=torch.long)
+                    
+                    # Add to RAM Cache
+                    self.data.append((code_tensor, doc_tensor))
+                    
+                    # Subset for debugging
+                    if subset and len(self.data) >= subset: 
+                        break
+                        
+                except json.JSONDecodeError:
+                    continue
+
         print(f"✅ Cache Ready: {len(self.data)} samples loaded into RAM.")
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        # Direct RAM access: O(1) complexity. Zero CPU overhead.
+        # Zero overhead access
         return self.data[idx]
 
 
-# --- [PHASE 4] HIGH-THROUGHPUT FACTORY (DataLoader) ---
+# --- [PHASE 3] DATALOADER FACTORY ---
 
 def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=True, subset=None):
     """
-    Configures the data pump to the GPU.
+    Configures the data pipeline.
     """
+    # Initialize the lean dataset
     dataset = CodeSummaryDataset(
-        data_dir, split_type, tokenizer_path, 
+        data_dir, 
+        split_type, 
+        tokenizer_path, 
         max_len_code=256, 
         max_len_doc=64, 
         subset=subset
@@ -155,10 +123,9 @@ def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=
     
     collator = SmartCollator(dataset.pad_id)
     
-    # [HARDWARE OPTIMIZATION]
-    # On Windows, we use parallel workers and pin_memory to speed up
-    # the transfer via the PCIe bus to the GPU's Tensor Cores.
+    # Hardware Optimization
     cpu_count = multiprocessing.cpu_count()
+    # On Windows/Mac sometimes too many workers cause overhead. 4 is a safe sweet spot.
     workers = min(cpu_count, 4) if torch.cuda.is_available() else 0
     
     return DataLoader(
@@ -167,7 +134,7 @@ def get_dataloader(data_dir, split_type, tokenizer_path, batch_size=32, shuffle=
         shuffle=shuffle, 
         collate_fn=collator,
         num_workers=workers,
-        pin_memory=True,            # Locked RAM for fast DMA transfer
-        prefetch_factor=2 if workers > 0 else None, # Prepare batches in advance
-        persistent_workers=True if workers > 0 else False # Do not destroy processes between epochs
+        pin_memory=True,            # Speed up CPU -> GPU transfer
+        prefetch_factor=2 if workers > 0 else None,
+        persistent_workers=True if workers > 0 else False
     )

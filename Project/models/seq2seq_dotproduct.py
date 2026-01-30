@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import random
 import numpy as np
 
+from models.seq2seq_bahdanau import Encoder # Riutilizziamo l'encoder standard
+
 class DotProductAttention(nn.Module):
     def __init__(self, hid_dim):
         super().__init__()
@@ -51,7 +53,7 @@ class DecoderDot(nn.Module):
 class Seq2SeqDotProduct(nn.Module):
     def __init__(self, vocab_size, emb_dim, hid_dim, n_layers, dropout, device):
         super().__init__()
-        from models.seq2seq_bahdanau import Encoder # Riutilizziamo l'encoder standard
+        
         self.encoder = Encoder(vocab_size, emb_dim, hid_dim, n_layers, dropout)
         self.decoder = DecoderDot(vocab_size, emb_dim, hid_dim, n_layers, dropout)
         self.device = device
