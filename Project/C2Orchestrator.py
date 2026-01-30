@@ -38,6 +38,7 @@ class CodeSummarizationPipeline:
         self.jsonl_base = os.path.join(self.dataset_root, "python", "final", "jsonl")
         self.tokenizer_path = os.path.join(self.root, "tokenizer.json")
         self.checkpoint_dir = os.path.join(self.root, "models", "checkpoints")
+        self.processed_dir = os.path.join(self.dataset_root, "processed")
 
         # Device configuration
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -81,16 +82,30 @@ class CodeSummarizationPipeline:
         save_human_readable_samples(self.jsonl_base, output_dir, "data_preview_raw.txt")
         telemetry.log_phase("data_infrastructure", time.time() - t0)
 
-        # Dataset cleaning
-        cleaner = DatasetCleaner()
-        output_dir = os.path.join(self.dataset_root, "processed")
-        cleaner.run(self.jsonl_base, output_dir)
+        # --- CONTROLLO DATASET PULITO ---
+        t1 = time.time()
+        
+        # Lista dei file attesi dopo la pulizia
+        expected_files = ["train.jsonl.gz", "valid.jsonl.gz", "test.jsonl.gz"]
+        
+        # Verifica se tutti i file esistono
+        # Nota: usiamo force_download anche qui per rigenerare se l'utente ha chiesto un reset completo
+        is_processed = all(os.path.exists(os.path.join(self.processed_dir, f)) for f in expected_files)
+        
+        if is_processed and not self.config.force_download:
+            logger.info(f"✅ Processed dataset found in '{self.processed_dir}'. Skipping cleaning phase.")
+        else:
+            logger.info("🧹 Processed data missing or forced refresh. Starting Dataset Cleaning...")
+            
+            # Dataset cleaning execution
+            cleaner = DatasetCleaner()
+            cleaner.run(self.jsonl_base, self.processed_dir)
 
-        # Save human-readable samples for inspection
-        input_dir = os.path.join(self.dataset_root, "processed")
-        output_dir = os.path.join(self.dataset_root, "Human_readable_sample")
-        save_human_readable_samples(input_dir, output_dir, "data_preview_processed.txt")
-        telemetry.log_phase("data_infrastructure", time.time() - t0)
+            # Save human-readable samples for inspection (Processed Data)
+            # Lo facciamo solo se abbiamo appena pulito, o se il file non esiste
+            save_human_readable_samples(self.processed_dir, output_dir, "data_preview_processed.txt")
+            
+        telemetry.log_phase("data_cleaning", time.time() - t1)
 
         # PHASE 2: TOKENIZER
         t0 = time.time()
@@ -100,7 +115,7 @@ class CodeSummarizationPipeline:
 
         if not reused:
             # Tokenizer's Vocabulary creation
-            build_tokenizer(self.jsonl_base, self.tokenizer_path, vocab_size=20000)
+            build_tokenizer(self.processed_dir, self.tokenizer_path, vocab_size=20000)
         tokenizer_duration = time.time() - t0
         
         # Load tokenizer and get vocabulary size
@@ -118,10 +133,10 @@ class CodeSummarizationPipeline:
         model_save_path = os.path.join(self.checkpoint_dir, filename)
 
         # DataLoader preparation
-        train_loader = get_dataloader(self.jsonl_base, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
+        train_loader = get_dataloader(self.processed_dir, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
 
         # Validation DataLoader (smaller subset for speed)
-        valid_loader = get_dataloader(self.jsonl_base, "valid", self.tokenizer_path, self.config.batch_size, subset=self.config.subset // 5 if self.config.subset else None)
+        valid_loader = get_dataloader(self.processed_dir, "valid", self.tokenizer_path, self.config.batch_size, subset=self.config.subset // 5 if self.config.subset else None)
 
         try:
             # Model training
@@ -137,8 +152,13 @@ class CodeSummarizationPipeline:
             # PHASE 4: AUTO-EVALUATION (Fast)
             t_eval_start = time.time()
 
+            """
             # Initialize evaluator and run evaluation
             evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.jsonl_base, subset_size=self.eval_samples)
+            """
+
+            # Initialize evaluator and run evaluation
+            evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.processed_dir, subset_size=self.eval_samples)
             df_results = evaluator.run_all(specific_file=filename)
             telemetry.log_phase(f"evaluation_{self.config.evaluation}", time.time() - t_eval_start)
             
@@ -192,10 +212,18 @@ class CodeSummarizationPipeline:
 
         logger.info(f"🔎 Models under review: {targets}")
 
+        """
         # Initializing Evaluator
         evaluator = BatchEvaluator(
             self.device, self.tokenizer_path, self.checkpoint_dir, 
             self.jsonl_base, subset_size=self.eval_samples
+        )
+        """
+
+        # Initializing Evaluator
+        evaluator = BatchEvaluator(
+            self.device, self.tokenizer_path, self.checkpoint_dir, 
+            self.processed_dir, subset_size=self.eval_samples
         )
 
         t_audit_start = time.time()
