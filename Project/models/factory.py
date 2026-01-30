@@ -5,7 +5,7 @@ from models.seq2seq_dotproduct import Seq2SeqDotProduct
 
 logger = logging.getLogger(__name__)
 
-def get_model_architecture(model_type, device, vocab_size=50000):
+def get_model_architecture(model_type, device, vocab_size=20000):
     """
     FACTORY ACTUATOR: Configura e istanzia l'architettura neurale richiesta.
     
