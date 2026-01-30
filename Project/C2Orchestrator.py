@@ -40,14 +40,13 @@ class CodeSummarizationPipeline:
         self.checkpoint_dir = os.path.join(self.root, "models", "checkpoints")
         self.processed_dir = os.path.join(self.dataset_root, "processed")
 
-        # Device configuration
-        if torch.cuda.device_count() > 1:
-            self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu") # Usa la seconda GPU
-            logger.info(f"Using External GPU: {torch.cuda.get_device_name(1)}")
-        else:
-            # Fallback se la eGPU è scollegata
-            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
-        #self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        for i in range(torch.cuda.device_count()):
+            print(f"Index {i}: {torch.cuda.get_device_name(i)}")
+
+        # Imposta la GPU esterna (supponendo sia l'indice 1) come UNICA visibile
+        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Evaluation Fidelity Mapping
         self.eval_map = {"instant": 100, "fast": 200, "deep": 1000}
