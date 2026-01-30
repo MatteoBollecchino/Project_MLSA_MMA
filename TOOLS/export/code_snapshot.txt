@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-27 15:36:54
+Generated on: 2026-01-30 09:57:36
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -173,7 +173,10 @@ class CodeSummarizationPipeline:
             try:
                 # Converts "1,2,4" into list indices [0, 1, 3]
                 indices = [int(i.strip()) - 1 for i in self.config.neval.split(",")]
+
+                # Select corresponding checkpoints
                 targets = [all_ckpts[i] for i in indices if 0 <= i < len(all_ckpts)]
+                
             except (ValueError, IndexError) as e:
                 logger.error(f"❌ Error in --neval format '{self.config.neval}': {e}")
                 return
@@ -207,43 +210,39 @@ class CodeSummarizationPipeline:
 if __name__ == "__main__":
 
     # Declaration of the parser for command line arguments
-    parser = argparse.ArgumentParser(description="C2 Orchestrator - Pipeline")
+    parser = argparse.ArgumentParser(description="C2 Orchestrator - Project CASS Pipeline")
     
     # Modality switch of the pipeline (train / eval)
     parser.add_argument("--mode", type=str, default="train", choices=["train", "eval"], 
                         help="Choose 'train' to train a new model or 'eval' to audit existing checkpoints")
     
-    # Model parameters & Training
-    parser.add_argument("--model", type=str, choices=["transformer", "lstm_attention"], 
-                        help="Architecture (Required only in --mode train)")
+    # --- MODEL PARAMETERS & TRAINING ---
+    # Aggiornato per riflettere la separazione delle logiche di Attention
+    parser.add_argument("--model", type=str, 
+                        choices=["transformer", "lstm_bahdanau", "lstm_dotproduct"], 
+                        help="Architecture selection: 'transformer' (High-Parallel), "
+                             "'lstm_bahdanau' (Additive/Learned), "
+                             "'lstm_dotproduct' (Multiplicative/Professor's version)")
+    
     parser.add_argument("--subset", type=int, default=None, help="Training dataset size")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=128)
     
-    # Audit / Evaluation parameters
+    # --- AUDIT / EVALUATION PARAMETERS ---
     parser.add_argument("--neval", type=str, default="1", 
-                        help="'all' for all checkpoints, or comma-separated indices (e.g., 1,2,4) based on reverse chronological order")
+                        help="'all' for all checkpoints, or comma-separated indices (e.g., 1,2,4) "
+                             "based on reverse chronological order")
     
-    # Evaluation depth parameter
     parser.add_argument("--evaluation", type=str, default="fast", choices=["instant", "fast", "deep"], 
                         help="Depth of evaluation (100, 200, 1000 samples)")
 
-    # INFRASTRUCTURE FLAGS
-    # Force re-download of the dataset
-    parser.add_argument("--force_download", action="store_true")
-
-    # Force re-preprocessing of the dataset (vocab + tokenization)
-    parser.add_argument("--force_preprocess", action="store_true")
-
-    # Deprecated flag for compatibility
-    parser.add_argument("--skip_train", action="store_true", help="Old flag for compatibility, prefer --mode eval")
+    # --- INFRASTRUCTURE FLAGS ---
+    parser.add_argument("--force_download", action="store_true", help="Force re-download of dataset")
+    parser.add_argument("--force_preprocess", action="store_true", help="Force re-creation of BPE vocabulary")
+    parser.add_argument("--force_train", action="store_true", help="Overwrite existing checkpoint if naming matches")
     
     # Parsing of arguments
     args = parser.parse_args()
-    
-    # Override for compatibility if the user still uses --skip_train
-    if args.skip_train:
-        args.mode = "eval"
 
     # Declaration and execution of the pipeline
     pipeline = CodeSummarizationPipeline(args)
@@ -945,6 +944,7 @@ class CodeSummaryDataset(Dataset):
         self.sos_id = self.tokenizer.token_to_id("<SOS>")
         self.eos_id = self.tokenizer.token_to_id("<EOS>")
 
+        # Locate all relevant files in the specified split directory
         search_pattern = os.path.join(data_dir, split_type, "*.jsonl.gz")
         files = glob.glob(search_pattern)
         
@@ -983,6 +983,7 @@ class CodeSummaryDataset(Dataset):
                                 code_tensor = torch.tensor([self.sos_id] + c_tokens[:self.max_len_code-2] + [self.eos_id])
                                 doc_tensor = torch.tensor([self.sos_id] + d_tokens[:self.max_len_doc-2] + [self.eos_id])
                                 
+                                # Append to in-RAM cache
                                 self.data.append((code_tensor, doc_tensor))
                         
                         # Subset management (for quick debugging)
@@ -1079,6 +1080,92 @@ def download_codesearchnet_robust(output_dir="Project/Datasets"):
 # MAIN EXECUTION
 if __name__ == "__main__":
     download_codesearchnet_robust()
+
+================================================================================
+
+--- FILE: inspect_corpus.py | PATH: Project\data\inspect_corpus.py ---
+----------------------------------------------------------------------
+
+import os
+import json
+import gzip
+import glob
+import re
+
+# --- CONFIGURAZIONE ---
+# Sostituisci con il percorso dove hai salvato le cartelle (es. "python", "java", etc.)
+JSONL_BASE_DIR = "Project/Datasets/python/final/jsonl" 
+NUM_SAMPLES = 5  # Quanti esempi vuoi stampare
+
+# --- TUE FUNZIONI DI PULIZIA (Copia-Incolla dal tuo codice) ---
+def clean_docstring(doc):
+    """ Cleans a docstring by removing noise such as Sphinx/doctest tags and taking only the first line. """
+    if not doc: return ""
+    first_line = doc.split('\n\n')[0].split('\n')[0]
+    clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
+    clean = re.sub(r'>>>.*', '', clean)
+    return clean.strip()
+
+# --- FUNZIONE DI ISPEZIONE ---
+def inspect_temp_content(base_dir, samples=5):
+    """
+    Replica la logica di prepare_vocab ma stampa a video invece di salvare su file.
+    """
+    search_pattern = os.path.join(base_dir, "train", "*.jsonl.gz")
+    train_files = glob.glob(search_pattern)
+
+    if not train_files:
+        print(f"ERRORE: Nessun file trovato in {search_pattern}")
+        return
+
+    print(f"Trovati {len(train_files)} file. Analisi del primo file: {os.path.basename(train_files[0])}...\n")
+    print("="*60)
+
+    count = 0
+    
+    # Apriamo solo il primo file per fare un controllo rapido
+    with gzip.open(train_files[0], 'rt', encoding='utf-8') as f:
+        for line in f:
+            if count >= samples:
+                break
+            
+            try:
+                item = json.loads(line)
+                
+                # Estrazione (tua logica originale)
+                code = item.get('code', item.get('func_code_string', ''))
+                doc = item.get('docstring', item.get('func_documentation_string', ''))
+                
+                # Pulizia (tua logica originale)
+                clean_doc = clean_docstring(doc)
+                
+                # Filtri (tua logica originale)
+                if len(clean_doc) > 10 and len(code.split()) < 200:
+                    count += 1
+                    
+                    # --- SIMULAZIONE OUTPUT NEL FILE TEMP ---
+                    # Nel file temp verrebbe scritto: code + "\n" + clean_doc + "\n"
+                    
+                    print(f"--- ESEMPIO {count} ---")
+                    print("[CONTENUTO CHE VERREBBE SCRITTO NEL FILE TEMP]:")
+                    print("-" * 20)
+                    print(f"{code}")      # Riga 1: Codice
+                    print(f"{clean_doc}") # Riga 2: Docstring pulita
+                    print("-" * 20)
+                    print("\n")
+                    
+            except json.JSONDecodeError:
+                continue
+
+    print("="*60)
+    print("Ispezione completata.")
+
+# --- ESECUZIONE ---
+if __name__ == "__main__":
+    if os.path.exists(JSONL_BASE_DIR):
+        inspect_temp_content(JSONL_BASE_DIR, NUM_SAMPLES)
+    else:
+        print(f"Attenzione: La cartella '{JSONL_BASE_DIR}' non esiste. Modifica la variabile JSONL_BASE_DIR.")
 
 ================================================================================
 
@@ -1239,6 +1326,239 @@ def prepare_vocab(jsonl_base_dir, tokenizer_path):
         if os.path.exists(temp_text_file):
             os.remove(temp_text_file)
 
+
+================================================================================
+
+--- FILE: preprocess_complete.py | PATH: Project\data\preprocess_complete.py ---
+--------------------------------------------------------------------------------
+
+import os
+import gzip
+import json
+import glob
+import re
+import hashlib
+import logging
+import io
+import tokenize 
+from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
+
+class DatasetCleaner:
+    def __init__(self, min_code=20, max_code=250, min_doc=3, max_doc=50):
+        self.min_code = min_code
+        self.max_code = max_code
+        self.min_doc = min_doc
+        self.max_doc = max_doc
+        self.global_seen_hashes = set()
+
+    @staticmethod
+    def clean_docstring(doc):
+        """Pulisce la docstring (Target)."""
+        if not doc: return ""
+        doc = doc.split('\n\n')[0]
+        doc = re.sub(r'(:param|:type|:return|:rtype|@param|@return|@throws|Args:|Returns:|Raises:).*', '', doc, flags=re.MULTILINE)
+        doc = re.sub(r'>>>.*', '', doc)
+        doc = re.sub(r'http\S+', '', doc)
+        return ' '.join(doc.split()).strip()
+
+    @staticmethod
+    def remove_docstring_from_code(code):
+        """
+        Rimuove la docstring dal codice sorgente in modo robusto.
+        Tenta prima con AST (più preciso), poi con Tokenizer, infine Regex.
+        """
+        if not code: return ""
+
+        # --- TENTATIVO 1: AST (Abstract Syntax Tree) - Il metodo più sicuro ---
+        # Richiede codice sintatticamente valido. Ottimo per Python 3.9+
+        try:
+            import ast
+            parsed = ast.parse(code)
+            
+            # Naviga nell'albero per trovare funzioni/classi
+            for node in ast.walk(parsed):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
+                    if not node.body: continue
+                    
+                    # Controlla se il primo elemento del body è una stringa (Docstring)
+                    if isinstance(node.body[0], ast.Expr) and \
+                       isinstance(node.body[0].value, (ast.Str, ast.Constant)):
+                        
+                        # Check compatibilità versioni Python
+                        val = node.body[0].value
+                        is_docstring = False
+                        if isinstance(val, ast.Str): is_docstring = True # Python < 3.8
+                        elif isinstance(val, ast.Constant) and isinstance(val.value, str): is_docstring = True # Python >= 3.8
+                        
+                        if is_docstring:
+                            node.body.pop(0) # Rimuovi il nodo docstring
+
+            # Ricostruisci il codice (Normalizza anche l'indentazione!)
+            if hasattr(ast, 'unparse'):
+                return ast.unparse(parsed)
+                
+        except (SyntaxError, IndentationError, ImportError, AttributeError):
+            # Se il codice è rotto o AST fallisce, passiamo al metodo manuale
+            pass
+
+        # --- TENTATIVO 2: Tokenizer (Fallback robusto) ---
+        io_obj = io.BytesIO(code.encode('utf-8'))
+        out = ""
+        last_lineno = -1
+        last_col = 0
+        
+        try:
+            tokgen = tokenize.tokenize(io_obj.readline)
+            for tok in tokgen:
+                token_type = tok.type
+                token_string = tok.string
+                start_line, start_col = tok.start
+                end_line, end_col = tok.end
+
+                # Salta le stringhe di documentazione
+                if token_type == tokenize.STRING:
+                    if token_string.startswith('"""') or token_string.startswith("'''"):
+                        continue
+                
+                # Ricostruzione
+                if start_line > last_lineno:
+                    last_col = 0
+                if start_col > last_col:
+                    out += " " * (start_col - last_col)
+                
+                out += token_string
+                last_col = end_col
+                last_lineno = end_line
+                
+        except (tokenize.TokenError, IndentationError, SyntaxError):
+            # --- TENTATIVO 3: Regex (Ultima spiaggia) ---
+            # Se anche il tokenizer fallisce (codice molto rotto), usa la regex
+            # Rimuove triple quotes grossolanamente
+            out = re.sub(r'(\"\"\"[\s\S]*?\"\"\"|\'\'\'[\s\S]*?\'\'\')', '', code, count=1)
+            return out.strip()
+
+        return out.strip()
+
+    def process_split(self, split_name, input_dir, output_dir, mode="filter"):
+        search_path = os.path.join(input_dir, split_name, "*.jsonl.gz")
+        files = glob.glob(search_path)
+        
+        if not files:
+            logger.warning(f"Nessun file trovato per: {split_name}")
+            return
+
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"{split_name}.jsonl")
+        
+        stats = {"total": 0, "kept": 0, "removed_len": 0, "removed_dupe": 0, "removed_doc": 0}
+        
+        logger.info(f"Processing {split_name.upper()} -> {output_file}")
+
+        with open(output_file, 'w', encoding='utf-8') as out_f:
+            for file_path in tqdm(files, desc=f"Cleaning {split_name}"):
+                with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                    for line in f:
+                        stats["total"] += 1
+                        try:
+                            data = json.loads(line)
+                            
+                            raw_code = data.get('code', data.get('func_code_string', ''))
+                            raw_doc = data.get('docstring', data.get('func_documentation_string', ''))
+                            
+                            if not raw_code: continue
+
+                            # 1. Pulisci il TARGET (Docstring)
+                            clean_doc = self.clean_docstring(raw_doc)
+                            if not clean_doc or not any(c.isalnum() for c in clean_doc):
+                                stats["removed_doc"] += 1
+                                continue
+                            
+                            # 2. Pulisci l'INPUT (Codice) - RIMUOVI LA DOCSTRING DAL CODICE
+                            clean_code = self.remove_docstring_from_code(raw_code)
+                            
+                            # Se rimuovendo la docstring non rimane codice (funzione vuota), scartala
+                            if not clean_code.strip() or len(clean_code.strip()) < 10:
+                                stats["removed_doc"] += 1 # Contiamo come removed bad code/doc
+                                continue
+
+                            # 3. Filtri Lunghezza (sui dati puliti)
+                            code_len = len(clean_code.split())
+                            doc_len = len(clean_doc.split())
+                            
+                            if not (self.min_code <= code_len <= self.max_code):
+                                stats["removed_len"] += 1
+                                continue
+                            if not (self.min_doc <= doc_len <= self.max_doc):
+                                stats["removed_len"] += 1
+                                continue
+
+                            # 4. Deduplicazione Cross-Split
+                            code_norm = re.sub(r'\s+', '', clean_code) # Hash sul codice PULITO (senza docstring)
+                            code_hash = hashlib.md5(code_norm.encode('utf-8')).hexdigest()
+                            
+                            if code_hash in self.global_seen_hashes:
+                                stats["removed_dupe"] += 1
+                                continue
+                            
+                            if mode == "build":
+                                self.global_seen_hashes.add(code_hash)
+
+                            # 5. Scrittura
+                            # NOTA: Salviamo 'clean_code' come 'code', non 'raw_code'!
+                            entry = {
+                                "code": clean_code, 
+                                "docstring": clean_doc
+                            }
+                            out_f.write(json.dumps(entry) + "\n")
+                            stats["kept"] += 1
+
+                        except json.JSONDecodeError:
+                            continue
+        
+        logger.info(f"[{split_name.upper()}] Kept: {stats['kept']} | Dupes: {stats['removed_dupe']} | Len: {stats['removed_len']}")
+
+    def run(self, input_dir, output_dir):
+        self.process_split("train", input_dir, output_dir, mode="build")
+        self.process_split("valid", input_dir, output_dir, mode="filter")
+        self.process_split("test", input_dir, output_dir, mode="filter")
+
+# --- MAIN ---
+def main():
+
+    DATASET_ROOT = "Project/Datasets/python/final/jsonl"
+    OUTPUT_DIR = "Project/Datasets/processed"
+
+    if not os.path.exists(DATASET_ROOT):
+        logger.error(f"Cartella dataset non trovata: {DATASET_ROOT}")
+        return
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
+    # Set globale per tracciare gli hash attraverso TUTTI gli split
+    # Questo è il segreto per evitare data leakage.
+    global_seen_hashes = set()
+
+    cleaner = DatasetCleaner()
+    cleaner.run(DATASET_ROOT, OUTPUT_DIR)
+    
+    """
+    # L'ordine è FONDAMENTALE:
+    # 1. Train (Definisce la conoscenza base)
+    DatasetCleaner.process_split("train", DATASET_ROOT, OUTPUT_DIR, global_seen_hashes)
+    
+    # 2. Valid (Non deve contenere nulla che sia nel Train)
+    DatasetCleaner.process_split("valid", DATASET_ROOT, OUTPUT_DIR, global_seen_hashes)
+    
+    # 3. Test (Non deve contenere nulla che sia in Train o Valid)
+    DatasetCleaner.process_split("test", DATASET_ROOT, OUTPUT_DIR, global_seen_hashes)
+    
+    logger.info("Preprocessing Completo. File salvati in: " + OUTPUT_DIR)
+    """
+
+if __name__ == "__main__":
+    main()
 
 ================================================================================
 
@@ -5121,271 +5441,189 @@ def foldByKey(self, zeroValue, func, numPartitions=None, partitionFunc=portable_
 
 ================================================================================
 
---- FILE: attention.py | PATH: Project\models\attention.py ---
---------------------------------------------------------------
+--- FILE: factory.py | PATH: Project\models\factory.py ---
+----------------------------------------------------------
+
+import logging
+from models.transformer import Seq2SeqTransformer
+from models.seq2seq_bahdanau import Seq2SeqBahdanau
+from models.seq2seq_dotproduct import Seq2SeqDotProduct
+
+logger = logging.getLogger(__name__)
+
+def get_model_architecture(model_type, device, vocab_size=50000):
+    params = {
+        "emb_dim": 256, "hid_dim": 512, "n_layers": 2, 
+        "dropout": 0.1, "nhead": 8, "transformer_layers": 6
+    }
+
+    if model_type == "lstm_bahdanau":
+        logger.info("🏗️ Factory: Generating LSTM + Bahdanau (Additive)")
+        return Seq2SeqBahdanau(vocab_size, params["emb_dim"], params["hid_dim"], 
+                               params["n_layers"], params["dropout"], device).to(device)
+
+    elif model_type == "lstm_dotproduct":
+        logger.info("🏗️ Factory: Generating LSTM + DotProduct (Professor's Version)")
+        return Seq2SeqDotProduct(vocab_size, params["emb_dim"], params["hid_dim"], 
+                                 params["n_layers"], params["dropout"], device).to(device)
+
+    elif model_type == "transformer":
+        logger.info(f"⚡ Factory: Generating Transformer (Heads: {params['nhead']})")
+        return Seq2SeqTransformer(vocab_size, d_model=params["hid_dim"], nhead=params["nhead"],
+                                  num_layers=params["transformer_layers"], dropout=0.1).to(device)
+    
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+================================================================================
+
+--- FILE: seq2seq_bahdanau.py | PATH: Project\models\seq2seq_bahdanau.py ---
+----------------------------------------------------------------------------
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import random
 
-# --- [ATTENTION MECHANISM CLASS] ---
-class Attention(nn.Module):
-
+class BahdanauAttention(nn.Module):
     def __init__(self, hid_dim):
-        """ Attention Mechanism initialization. """
-
         super().__init__()
-
-        # Linear layers for attention computation
         self.attn = nn.Linear(hid_dim * 2, hid_dim)
-
-        # Final linear layer to produce attention scores
         self.v = nn.Linear(hid_dim, 1, bias=False)
-        
-    def forward(self, hidden, encoder_outputs):
-        """ Forward pass for the attention mechanism. """
 
-        # hidden: [batch_size, hid_dim] (last state of the decoder)
-        # encoder_outputs: [batch_size, src_len, hid_dim]
+    def forward(self, hidden, encoder_outputs):
         src_len = encoder_outputs.shape[1]
-        
-        # Repeat hidden for each source time step
         hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
-        
         attention = self.v(energy).squeeze(2)
-        
-        # Softmax to obtain a probability distribution (sum = 1)
         return F.softmax(attention, dim=1)
 
+class Encoder(nn.Module):
+    def __init__(self, input_dim, emb_dim, hid_dim, n_layers, dropout):
+        super().__init__()
+        self.embedding = nn.Embedding(input_dim, emb_dim)
+        self.rnn = nn.LSTM(emb_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
 
-================================================================================
+    def forward(self, src):
+        embedded = self.dropout(self.embedding(src))
+        outputs, (hidden, cell) = self.rnn(embedded)
+        return outputs, hidden, cell
 
---- FILE: decoder.py | PATH: Project\models\decoder.py ---
-----------------------------------------------------------
-
-import torch
-import torch.nn as nn
-
-# --- [DECODER MODULE] ---
 class Decoder(nn.Module):
-
-    # Initialization of the Decoder
-    def __init__(self, output_dim, emb_dim, hid_dim, n_layers, dropout, attention):
-        """ Initializes the Decoder module. """
+    def __init__(self, output_dim, emb_dim, hid_dim, n_layers, dropout):
         super().__init__()
         self.output_dim = output_dim
-
-        # Attention mechanism
-        self.attention = attention
-
-        # Layers of the Decoder
+        self.attention = BahdanauAttention(hid_dim)
         self.embedding = nn.Embedding(output_dim, emb_dim)
-
-        # LSTM layer
         self.rnn = nn.LSTM(emb_dim + hid_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
-
-        # Final output layer
         self.fc_out = nn.Linear(emb_dim + hid_dim * 2, output_dim)
-
-        # Dropout layer
         self.dropout = nn.Dropout(dropout)
-    
-    # Forward pass of the Decoder
+
     def forward(self, input, hidden, cell, encoder_outputs):
-        """ Performs a forward pass through the Decoder. """
-        
-        # input: [batch_size] -> a single token (the previous one)
         input = input.unsqueeze(1)
         embedded = self.dropout(self.embedding(input))
-        
-        # Calculate attention weights based on the last hidden state
         a = self.attention(hidden[-1], encoder_outputs).unsqueeze(1)
-
-        # Dot product to obtain the context vector: [batch_size, 1, hid_dim]
         weighted = torch.bmm(a, encoder_outputs)
-        
-        #Concatenate embedded token with context vector on dim 2
         rnn_input = torch.cat((embedded, weighted), dim=2)
         output, (hidden, cell) = self.rnn(rnn_input, (hidden, cell))
-        
-        # Concatenate everything for the final projection on the vocabulary
         prediction = self.fc_out(torch.cat((output, weighted, embedded), dim=2))
         return prediction.squeeze(1), hidden, cell
 
-================================================================================
-
---- FILE: encoder.py | PATH: Project\models\encoder.py ---
-----------------------------------------------------------
-
-import torch
-import torch.nn as nn
-
-# --- [ENCODER MODULE] ---
-class Encoder(nn.Module):
-
-    # Initialization of the Encoder
-    def __init__(self, input_dim, emb_dim, hid_dim, n_layers, dropout):
-        """ Initializes the Encoder with embedding and LSTM layers. """
-
+class Seq2SeqBahdanau(nn.Module):
+    def __init__(self, vocab_size, emb_dim, hid_dim, n_layers, dropout, device):
         super().__init__()
-
-        # Embedding layer: converts token indices to dense vectors
-        self.embedding = nn.Embedding(input_dim, emb_dim)
-
-        # LSTM: manages temporal dependencies in the code
-        self.rnn = nn.LSTM(emb_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
-
-        # Dropout layer: regularization to prevent overfitting
-        self.dropout = nn.Dropout(dropout)
-        
-    # Forward pass of the Encoder
-    def forward(self, src):
-        """ Forward pass through the Encoder. """
-
-        # src: [batch_size, src_len]
-
-        # Apply embedding and dropout
-        embedded = self.dropout(self.embedding(src))
-
-        # Pass through the RNN
-        outputs, (hidden, cell) = self.rnn(embedded)
-        # outputs: [batch_size, src_len, hid_dim] -> used by Attention
-        # hidden/cell: [n_layers, batch_size, hid_dim] -> compressed final state
-        return outputs, hidden, cell
-
-================================================================================
-
---- FILE: factory.py | PATH: Project\models\factory.py ---
-----------------------------------------------------------
-
-import torch
-import logging
-from models.encoder import Encoder
-from models.attention import Attention
-from models.decoder import Decoder
-from models.seq2seq import Seq2Seq
-from models.transformer import Seq2SeqTransformer # Assicurati che il file esista
-
-# Logger Configuration
-logger = logging.getLogger(__name__)
-
-# --- [ARCHITECTURE FACTORY FUNCTION] ---
-def get_model_architecture(model_type, device, vocab_size=50000, config=None):
-    """
-    Architecture Factory: Generates instances of models based on tags.
-    Implements the Abstract Factory pattern to isolate topology from hyperparameters.
-    """
-    
-    # --- DEFAULT CONFIGURATION (Override possible via config) ---
-    # Using a dictionary to maintain orthogonality
-    params = {
-        "emb_dim": 256,
-        "hid_dim": 512,
-        "n_layers": 2,
-        "dropout": 0.5,
-        "nhead": 8,             # Only for Transformer
-        "transformer_layers": 6 # Only for Transformer
-    }
-    
-    # If we pass a config object (from argparse), override defaults
-    if config:
-        # Example: params["hid_dim"] = getattr(config, "hid_dim", params["hid_dim"])
-        pass
-
-    if model_type == "lstm_attention":
-        logger.info(f"🏗️ Factory: Generating LSTM-ATTN | Vocab: {vocab_size} | Hidden: {params['hid_dim']}")
-        
-        # Attention mechanism
-        attn = Attention(params["hid_dim"])
-
-        # Encoder-Decoder with Attention
-        enc = Encoder(vocab_size, params["emb_dim"], params["hid_dim"], params["n_layers"], params["dropout"])
-        dec = Decoder(vocab_size, params["emb_dim"], params["hid_dim"], params["n_layers"], params["dropout"], attn)
-        
-        # Seq2Seq Model
-        return Seq2Seq(enc, dec, device).to(device)
-
-    elif model_type == "transformer":
-        logger.info(f"⚡ Factory: Generating Transformer | Heads: {params['nhead']} | Layers: {params['transformer_layers']}")
-        
-        # Implementation of Seq2SeqTransformer based on standard PyTorch
-        model = Seq2SeqTransformer(
-            vocab_size=vocab_size,
-            d_model=params["hid_dim"], # Often hid_dim and d_model coincide in base Transformers
-            nhead=params["nhead"],
-            num_layers=params["transformer_layers"],
-            dropout=0.1 # Transformers prefer less aggressive dropout than LSTMs
-        )
-        
-        # Transformer Model
-        return model.to(device)
-
-    else:
-        logger.error(f"❌ Factory Failure: Tag '{model_type}' not recognized.")
-        raise ValueError(f"Tag '{model_type}' not supported by the factory.")
-
-================================================================================
-
---- FILE: seq2seq.py | PATH: Project\models\seq2seq.py ---
-----------------------------------------------------------
-
-import torch
-import torch.nn as nn
-import random
-
-# --- [SEQ2SEQ MODULE] ---
-class Seq2Seq(nn.Module):
-
-    # Initialization of the Seq2Seq model
-    def __init__(self, encoder, decoder, device):
-        """ Initializes the Seq2Seq model with encoder, decoder, and device. """
-
-        super().__init__()
-        self.encoder = encoder
-        self.decoder = decoder
+        self.encoder = Encoder(vocab_size, emb_dim, hid_dim, n_layers, dropout)
+        self.decoder = Decoder(vocab_size, emb_dim, hid_dim, n_layers, dropout)
         self.device = device
-        
-    # Forward pass of the Seq2Seq model
+        self.output_dim = vocab_size
+
     def forward(self, src, trg, teacher_forcing_ratio=0.5):
-        """ Forward pass through the Seq2Seq model. """
-        
-        # src: [batch_size, src_len], trg: [batch_size, trg_len]
-
-        # Get the batch size from the source sequence
-        batch_size = src.shape[0]
-
-        # Get the target sequence length
-        trg_len = trg.shape[1]
-
-        # Vocabulary size of the target language
-        trg_vocab_size = self.decoder.output_dim
-        
-        # Initialize the outputs tensor to store decoder outputs
-        outputs = torch.zeros(batch_size, trg_len, trg_vocab_size).to(self.device)
-
-        # Encode the source sequence
+        batch_size, trg_len = trg.shape[0], trg.shape[1]
+        outputs = torch.zeros(batch_size, trg_len, self.output_dim).to(self.device)
         encoder_outputs, hidden, cell = self.encoder(src)
-        
-        # The first input to the decoder is always the <SOS> token
         input = trg[:, 0]
-        
-        # Decode each token step by step
         for t in range(1, trg_len):
-
-            # Get the output from the decoder
             output, hidden, cell = self.decoder(input, hidden, cell, encoder_outputs)
             outputs[:, t] = output
-            
-            # Teacher Forcing logic: decide whether to "feed" the model with the truth
             teacher_force = random.random() < teacher_forcing_ratio
+            input = trg[:, t] if teacher_force else output.argmax(1)
+        return outputs
 
-            # Get the highest predicted token from our output
-            top1 = output.argmax(1)
+================================================================================
 
-            # If teacher forcing, use actual next token as next input; else use predicted token
-            input = trg[:, t] if teacher_force else top1
-            
+--- FILE: seq2seq_dotproduct.py | PATH: Project\models\seq2seq_dotproduct.py ---
+--------------------------------------------------------------------------------
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import random
+import numpy as np
+
+class DotProductAttention(nn.Module):
+    def __init__(self, hid_dim):
+        super().__init__()
+        # Proiezioni lineari come nelle slide del Prof
+        self.w_q = nn.Linear(hid_dim, hid_dim)
+        self.w_k = nn.Linear(hid_dim, hid_dim)
+        self.scale = np.sqrt(hid_dim)
+
+    def forward(self, query, keys):
+        # query: [batch, hid_dim] | keys: [batch, src_len, hid_dim]
+        q = self.w_q(query).unsqueeze(1) # [batch, 1, hid_dim]
+        k = self.w_k(keys).transpose(1, 2) # [batch, hid_dim, src_len]
+        
+        # Scaled Dot Product: (Q * K^T) / sqrt(d)
+        scores = torch.bmm(q, k) / self.scale # [batch, 1, src_len]
+        alphas = F.softmax(scores, dim=-1)
+        
+        # Context vector
+        context = torch.bmm(alphas, keys) # [batch, 1, hid_dim]
+        return alphas.squeeze(1), context
+
+class DecoderDot(nn.Module):
+    def __init__(self, output_dim, emb_dim, hid_dim, n_layers, dropout):
+        super().__init__()
+        self.output_dim = output_dim
+        self.attention = DotProductAttention(hid_dim)
+        self.embedding = nn.Embedding(output_dim, emb_dim)
+        self.rnn = nn.LSTM(emb_dim + hid_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
+        self.fc_out = nn.Linear(hid_dim, output_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, input, hidden, cell, encoder_outputs):
+        input = input.unsqueeze(1)
+        embedded = self.dropout(self.embedding(input))
+        
+        # Usiamo l'ultimo stato nascosto come Query
+        _, context = self.attention(hidden[-1], encoder_outputs)
+        
+        rnn_input = torch.cat((embedded, context), dim=2)
+        output, (hidden, cell) = self.rnn(rnn_input, (hidden, cell))
+        
+        prediction = self.fc_out(output)
+        return prediction.squeeze(1), hidden, cell
+
+class Seq2SeqDotProduct(nn.Module):
+    def __init__(self, vocab_size, emb_dim, hid_dim, n_layers, dropout, device):
+        super().__init__()
+        from models.seq2seq_bahdanau import Encoder # Riutilizziamo l'encoder standard
+        self.encoder = Encoder(vocab_size, emb_dim, hid_dim, n_layers, dropout)
+        self.decoder = DecoderDot(vocab_size, emb_dim, hid_dim, n_layers, dropout)
+        self.device = device
+        self.output_dim = vocab_size
+
+    def forward(self, src, trg, teacher_forcing_ratio=0.5):
+        batch_size, trg_len = trg.shape[0], trg.shape[1]
+        outputs = torch.zeros(batch_size, trg_len, self.output_dim).to(self.device)
+        encoder_outputs, hidden, cell = self.encoder(src)
+        input = trg[:, 0]
+        for t in range(1, trg_len):
+            output, hidden, cell = self.decoder(input, hidden, cell, encoder_outputs)
+            outputs[:, t] = output
+            teacher_force = random.random() < teacher_forcing_ratio
+            input = trg[:, t] if teacher_force else output.argmax(1)
         return outputs
 
 ================================================================================
@@ -5397,19 +5635,9 @@ import torch
 import torch.nn as nn
 import math
 
-# --- TRANSFORMER MODEL DEFINITION ---
 class PositionalEncoding(nn.Module):
-    """
-    Injects information about the order of tokens.
-    Without this, the Transformer would treat the code as a 'bag of words'.
-    """
-    
-    # Positional Encoding Initialization
     def __init__(self, d_model, max_len=5000):
-        """ Initializes the PositionalEncoding module. """
         super().__init__()
-
-        # Creation of the matrix for positional encoding
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
@@ -5417,83 +5645,40 @@ class PositionalEncoding(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe.unsqueeze(0))
 
-    # Forward pass to add positional encoding to input embeddings
     def forward(self, x):
-        """ Adds positional encoding to input embeddings. """
-
         return x + self.pe[:, :x.size(1)]
 
-
-# --- SEQ2SEQ TRANSFORMER MODEL DEFINITION ---
 class Seq2SeqTransformer(nn.Module):
-    """ Seq2Seq Transformer Model for code generation tasks. """
-
-    # Initialization of the Transformer model
     def __init__(self, vocab_size, d_model=512, nhead=8, num_layers=6, dim_feedforward=2048, dropout=0.1):
-        """ Initializes the Seq2SeqTransformer model. """
-
         super().__init__()
-
-        # Model components
-        self.model_type = 'Transformer'
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.pos_encoder = PositionalEncoding(d_model)
-        
-        # Transformer block
         self.transformer = nn.Transformer(
-            d_model=d_model,
-            nhead=nhead,
-            num_encoder_layers=num_layers,
-            num_decoder_layers=num_layers,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            batch_first=True 
+            d_model=d_model, nhead=nhead, num_encoder_layers=num_layers,
+            num_decoder_layers=num_layers, dim_feedforward=dim_feedforward,
+            dropout=dropout, batch_first=True 
         )
-        
-        # Final linear layer to project to vocabulary size
         self.fc_out = nn.Linear(d_model, vocab_size)
         self.d_model = d_model
 
-    # Causal mask generation
     def _generate_causal_mask(self, sz, device):
-        """ Prevents the decoder from peeking at future tokens (Look-ahead mask). """
-
-        # Create a square matrix of size sz x sz
         mask = (torch.triu(torch.ones(sz, sz, device=device)) == 1).transpose(0, 1)
+        return mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
 
-        # Convert boolean mask to float with -inf and 0.0
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
-
-    # Forward pass of the Transformer model
-    def forward(self, src, trg, teacher_forcing_ratio=None, **kwargs):
-        """
-        Mask Engineering:
-        1. Causal Mask: Prevents seeing the future in the target.
-        2. Padding Mask: Prevents giving importance to <PAD> tokens (ID 0).
-        """
-        
-        # Creation of padding masks (True where PAD)
+    def forward(self, src, trg, **kwargs):
         src_padding_mask = (src == 0)
         tgt_padding_mask = (trg == 0)
-        
-        # Creation of causal mask for parallel training
         tgt_mask = self._generate_causal_mask(trg.size(1), src.device)
         
-        # Embedding + Scaling (Standard for Transformer stability)
         src_emb = self.pos_encoder(self.embedding(src) * math.sqrt(self.d_model))
         tgt_emb = self.pos_encoder(self.embedding(trg) * math.sqrt(self.d_model))
         
-        # Execution of the Transformer block with injection of all masks
         output = self.transformer(
-            src_emb, 
-            tgt_emb, 
-            tgt_mask=tgt_mask,
+            src_emb, tgt_emb, tgt_mask=tgt_mask,
             src_key_padding_mask=src_padding_mask,
             tgt_key_padding_mask=tgt_padding_mask,
-            memory_key_padding_mask=src_padding_mask # The decoder ignores the encoder's padding
+            memory_key_padding_mask=src_padding_mask
         )
-        
         return self.fc_out(output)
 
 ================================================================================
