@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-01-30 14:30:05
+Generated on: 2026-01-31 11:35:53
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -256,7 +256,7 @@ class CodeSummarizationPipeline:
 if __name__ == "__main__":
 
     # Declaration of the parser for command line arguments
-    parser = argparse.ArgumentParser(description="C2 Orchestrator - Project CASS Pipeline")
+    parser = argparse.ArgumentParser(description="C2 Orchestrator - Project Pipeline")
     
     # Modality switch of the pipeline (train / eval)
     parser.add_argument("--mode", type=str, default="train", choices=["train", "eval"], 
@@ -389,7 +389,7 @@ print("--- [FASE 1] MOUNT E MAPPATURA PERCORSI ---")
 drive.mount('/content/drive', force_remount=True)
 
 # Percorso validato dallo Scanner (Chirurgicamente esatto)
-PROJECT_ROOT = "/content/drive/MyDrive/LifeLineV4/PROGETTI/Universita/Software_Science_And_Technology/MACHINE LEARNING FOR SOFTWARE ANALYSIS/PROJECT__MLSA_MMA/COLAB/Project_MLSA_MMA/Project"
+PROJECT_ROOT = "/content/drive/MyDrive/LifeLineV4/PROGETTI/Universita/Software_Science_And_Technology/MACHINE LEARNING FOR SOFTWARE ANALYSIS/PROJECT__MLSA_MMA/COLAB_Marco/Project_MLSA_MMA/Project"
 
 if not os.path.exists(PROJECT_ROOT):
     print(f"❌ ERRORE CRITICO: Il percorso {PROJECT_ROOT} non esiste.")
@@ -411,21 +411,27 @@ if device == "cuda":
 else:
     print("⚠️ ATTENZIONE: GPU NON RILEVATA! Controlla 'Runtime -> Cambia tipo di runtime'.")
 
-# 3. PROVISIONING DIPENDENZE
+# 3. PROVISIONING DIPENDENZE (Ambiente Isolato)
 print("\n--- [FASE 3] INSTALLAZIONE STRUMENTI ---")
 !pip install tokenizers tqdm nltk rouge-score -q
 
-# 4. ESECUZIONE ORCHESTRATORE 
-# --subset 50000: Massa critica per eliminare il bias "DataFrame"
-# --batch_size 128: Saturazione ottimale per GPU T4 con AMP (Automatic Mixed Precision)
-# --epochs 10: Finestra di convergenza standard
-# --force_train: Ignora eventuali residui e crea un nuovo file versionato
+# 4. ESECUZIONE ORCHESTRATORE (L'Attacco Finale)
+# Nota Ingegneristica: Decommenta SOLO la riga dell'esperimento desiderato.
+# I parametri sono calibrati per saturare la VRAM di una Tesla T4 senza crash.
+
 print("\n--- [FASE 4] AVVIO ADDESTRAMENTO PESANTE ---")
-!python C2Orchestrator.py \
-    --subset 50000 \
-    --epochs 5 \
-    --batch_size 128 \
-    --force_train
+
+# --- OPZIONE A: TRANSFORMER (Il Titano Parallelo) ---
+# Ideale per catturare relazioni a lungo raggio nel codice.
+!python C2Orchestrator.py --mode train --model transformer --subset 50000 --epochs 10 --batch_size 128 --evaluation fast
+
+# --- OPZIONE B: LSTM + BAHDANAU (Attenzione Additiva) ---
+# Il modello "Sarto" che impara dinamicamente dove guardare.
+#!python C2Orchestrator.py --mode train --model lstm_bahdanau --subset 50000 --epochs 10 --batch_size 64 --evaluation fast
+
+# --- OPZIONE C: LSTM + DOTPRODUCT (Attenzione del Prof) ---
+# Implementazione basata sul prodotto scalare scalato (Scaled Dot-Product).
+#!python C2Orchestrator.py --mode train --model lstm_dotproduct --subset 50000 --epochs 10 --batch_size 64 --evaluation fast
 
 print("\n--- PIPELINE COMPLETATA CON SUCCESSO ---")
 
@@ -526,22 +532,15 @@ from tokenizers import Tokenizer
 from models.factory import get_model_architecture
 from data.dataset import get_dataloader
 
-# Resolution paths for internal imports
+# Resolution paths
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# Logger Configuration
 logger = logging.getLogger(__name__)
 
-# --- [BATCH EVALUATOR CLASS] ---
 class BatchEvaluator:
-    """ Class for batch evaluation of model checkpoints. """
-
-    # Initialization of the BatchEvaluator
     def __init__(self, device, tokenizer_path, checkpoint_dir, data_path, subset_size=200):
-        """ Initializes the BatchEvaluator with necessary parameters. """
-
         self.device = device
         self.tokenizer = Tokenizer.from_file(tokenizer_path)
         self.vocab_size = self.tokenizer.get_vocab_size()
@@ -551,105 +550,78 @@ class BatchEvaluator:
         self.subset_size = subset_size
         self.results = []
 
-    # Evaluates a single checkpoint
     def evaluate_single_checkpoint(self, checkpoint_name):
-        """ Evaluates a single model checkpoint and computes BLEU and ROUGE-L scores. """
+        # --- [MAPPING LOGIC AGGIORNATA] ---
+        # Identifichiamo l'architettura esatta dal nome del file
+        if "transformer" in checkpoint_name.lower():
+            model_tag = "transformer"
+        elif "lstm_bahdanau" in checkpoint_name.lower():
+            model_tag = "lstm_bahdanau"
+        elif "lstm_dotproduct" in checkpoint_name.lower():
+            model_tag = "lstm_dotproduct"
+        else:
+            # Fallback per compatibilità con vecchi checkpoint o errori di naming
+            model_tag = "lstm_bahdanau" 
+            logger.warning(f"⚠️ Tag non riconosciuto in {checkpoint_name}. Uso fallback: {model_tag}")
 
-        # Determine model type from filename
-        model_tag = "transformer" if "transformer" in checkpoint_name.lower() else "lstm_attention"
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
         
-        # Load model
         try:
-            # Instantiate model architecture
             model = get_model_architecture(model_tag, self.device, vocab_size=self.vocab_size)
-            
-            # Load model state
             model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
-            
-            # Evaluation of the model
             model.eval()
-
         except Exception as e:
             return {"file": checkpoint_name, "error": f"Load error: {str(e)}"}
         
-        # Prepare test data loader
         test_loader = get_dataloader(
             self.data_path, "test", 
             self.tokenizer_path, batch_size=1, subset=self.subset_size
         )
 
-        # Initialize references and hypotheses for evaluation metrics 
         references, hypotheses = [], []
-        sos_id, eos_id = self.tokenizer.token_to_id("<SOS>"), self.tokenizer.token_to_id("<EOS>")
+        sos_id = self.tokenizer.token_to_id("<SOS>")
+        eos_id = self.tokenizer.token_to_id("<EOS>")
 
-        # Inference loop
         with torch.no_grad():
-            for src, trg in tqdm(test_loader, desc=f"Valutazione {model_tag}", leave=False):
+            for src, trg in tqdm(test_loader, desc=f"Audit {model_tag}", leave=False):
                 src = src.to(self.device)
                 predicted_indices = []
 
-                # Evaluation for LSTM with Attention
-                if model_tag == "lstm_attention":
-                    # Encode the source sequence
+                # --- [INFERENCE LOGIC PER LSTM VARIANTS] ---
+                if "lstm" in model_tag:
                     encoder_outputs, hidden, cell = model.encoder(src)
-
-                    # Initialize input token
                     input_token = torch.LongTensor([sos_id]).to(self.device)
 
-                    # Decoding loop
                     for _ in range(30):
-                        # Generate next token
                         output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
-
-                        # Get the token with highest probability
                         top1 = output.argmax(1)
-
-                        # Break if EOS token is generated
                         if top1.item() == eos_id: break
-
-                        # Append predicted token and update input
                         predicted_indices.append(top1.item())
                         input_token = top1
                 
-                # Evaluation for Transformer
+                # --- [INFERENCE LOGIC PER TRANSFORMER] ---
                 else:
-                    # Initial input sequence with SOS token
                     ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(self.device)
-
-                    # Decoding loop
                     for _ in range(30):
-                        # Generate next token
                         out = model(src, ys)
-
-                        # Get the token with highest probability
                         next_word = out[:, -1].argmax(1).item()
-
-                        # Break if EOS token is generated
                         if next_word == eos_id: break
-
-                        # Append predicted token and update input sequence
                         predicted_indices.append(next_word)
                         ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(self.device)], dim=1)
 
-                # Decode predictions and references
                 pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
                 real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
+                
+                hypotheses.append(pred_text.split())
+                references.append([real_text.split()])
 
-                # Append to lists for metric calculation
-                hypotheses.append(pred_text.split()); references.append([real_text.split()])
-
-        # Calculate BLEU and ROUGE-L scores
         bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
         scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         rougeL = sum(scorer.score(" ".join(r[0]), " ".join(h))['rougeL'].fmeasure for h, r in zip(hypotheses, references)) / len(hypotheses)
         
-        return {"file": checkpoint_name, "bleu": bleu, "rougeL": rougeL}
+        return {"file": checkpoint_name, "model": model_tag, "bleu": bleu, "rougeL": rougeL}
 
-    # Runs evaluation on all checkpoints or a specific file
     def run_all(self, specific_file=None):
-        """ Runs evaluation on all checkpoints or a specific checkpoint file. """
-        
         files = [specific_file] if specific_file else [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
         if not files: return None
 
@@ -658,7 +630,6 @@ class BatchEvaluator:
             res = self.evaluate_single_checkpoint(ckpt)
             if "error" not in res: self.results.append(res)
         
-        # Return results as DataFrame
         return pd.DataFrame(self.results)
 
 ================================================================================
@@ -769,7 +740,6 @@ if __name__ == "__main__":
 ---------------------------------------------------------
 
 import torch
-import torch.nn.functional as F
 import json
 import gzip
 import os
@@ -777,25 +747,30 @@ import glob
 import random
 import sys
 from tokenizers import Tokenizer
-from models.factory import get_model_architecture
 
-# --- [PHASE 1] DETERMINISTIC NORMALIZATION ---
+# Risoluzione percorsi per import interni
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+from models.factory import get_model_architecture
+
+# --- [PHASE 1] DETERMINISTIC NORMALIZATION ---
+
 def clean_output(text):
-    """Removes BPE artifacts and normalizes spacing."""
+    """Rimuove artefatti BPE e normalizza la spaziatura."""
     return text.replace('Ġ', ' ').replace('  ', ' ').strip()
 
-# --- UNIVERSAL DECODING LOGIC ---
+# --- LOGICA DI DECODIFICA UNIVERSALE ---
+
 def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, device="cpu"):
     model.eval()
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
     
     with torch.no_grad():
-        if model_tag == "lstm_attention":
+        # LOGICA PER VARIANTI LSTM (Bahdanau & DotProduct condividono la struttura encoder/decoder)
+        if "lstm" in model_tag:
             encoder_outputs, hidden, cell = model.encoder(src_tensor)
             input_token = torch.LongTensor([sos_id]).to(device)
             predicted_indices = []
@@ -806,8 +781,9 @@ def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, d
                 predicted_indices.append(top1.item())
                 input_token = top1
             return predicted_indices
+        
+        # LOGICA PER TRANSFORMER
         else:
-            # Transformer logic
             ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(device)
             predicted_indices = []
             for _ in range(max_len):
@@ -818,63 +794,63 @@ def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, d
                 ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(device)], dim=1)
             return predicted_indices
 
-# --- DATA LOADING ---
+# --- DATA LOADING (Updated to Processed Directory) ---
+
 def load_samples(data_dir, split, num_samples=10):
-    search_pattern = os.path.join(data_dir, split, "*.jsonl.gz")
-    files = glob.glob(search_pattern)
-    if not files: return []
+    """Carica i campioni dai file già puliti (processed)."""
+    file_path = os.path.join(data_dir, f"{split}.jsonl.gz")
+    if not os.path.exists(file_path):
+        print(f"⚠️ File non trovato: {file_path}")
+        return []
     
     samples = []
-    random.shuffle(files)
-    for file_path in files:
-        try:
-            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-                lines = f.readlines()
-                chosen = random.sample(lines, min(num_samples - len(samples), len(lines)))
-                for c in chosen:
-                    item = json.loads(c)
-                    samples.append({
-                        'code': item.get('code', item.get('func_code_string', '')),
-                        'doc': item.get('docstring', item.get('func_documentation_string', ''))
-                    })
-            if len(samples) >= num_samples: break
-        except: continue
-    return samples[:num_samples]
+    try:
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            lines = f.readlines()
+            chosen = random.sample(lines, min(num_samples, len(lines)))
+            for c in chosen:
+                item = json.loads(c)
+                samples.append({
+                    'code': item.get('code', ''),
+                    'doc': item.get('docstring', '')
+                })
+    except Exception as e:
+        print(f"❌ Errore caricamento campioni: {e}")
+    return samples
 
 # --- CORE AUDIT ENGINE ---
+
 def run_deep_audit():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer_path = os.path.join(project_root, "tokenizer.json")
     checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
-    data_root = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
+    
+    # PUNTA ALLA CARTELLA PROCESSED (Decisione Architetturale corretta)
+    data_root = os.path.join(project_root, "Datasets", "processed")
 
     tokenizer = Tokenizer.from_file(tokenizer_path)
     vocab_size = tokenizer.get_vocab_size()
     
-    # --- SUITE 10-10-10 ALIGNMENT ---
     suites = {
         "TRAIN (Memorization)": load_samples(data_root, "train", 10),
         "TEST (Generalization)": load_samples(data_root, "test", 10),
-        "CUSTOM (High Complexity Alignment)": [
-            {"code": "def load_config(path):\n    with open(path, 'r') as f:\n        return json.load(f)", "doc": "Loads a configuration file from a JSON path."},
-            {"code": "def get_db_connection(url):\n    try:\n        return create_engine(url).connect()\n    except Exception as e:\n        raise ConnectionError(e)", "doc": "Establishes a connection to the database or raises error."},
-            {"code": "def process_image_batch(images, size):\n    return [cv2.resize(img, size) for img in images]", "doc": "Resizes a batch of images to a specific dimension."},
-            {"code": "def calculate_rdd_mean(rdd):\n    return rdd.map(lambda x: (x, 1)).reduce(lambda a, b: (a[0]+b[0], a[1]+b[1]))", "doc": "Computes the mean of an RDD using map and reduce."},
-            {"code": "def detect_faces_cnn(img):\n    return cnn_face_detector(img, upsample_num=1)", "doc": "Uses a CNN model to detect human faces in an image."},
-            {"code": "def walk_dir_tree(root):\n    for root, dirs, files in os.walk(root):\n        yield files", "doc": "Recursively yields files from a directory tree structure."},
-            {"code": "def apply_mask(tensor, mask_val=0):\n    return tensor.masked_fill(tensor == mask_val, float('-inf'))", "doc": "Applies a padding mask to a given input tensor."},
-            {"code": "def validate_token_auth(token):\n    if not token.startswith('Bearer '):\n        return False\n    return verify_jwt(token)", "doc": "Verifies if the provided token is a valid JWT Bearer."},
-            {"code": "def serialize_row_as_dict(row):\n    return {field: getattr(row, field) for field in row.__fields__}", "doc": "Converts a dataset row object into a standard dictionary."},
-            {"code": "def compute_euclidean_dist(a, b):\n    return np.linalg.norm(a - b, axis=1)", "doc": "Calculates the euclidean distance between two numpy arrays."}
+        "CUSTOM (Complex logic)": [
+            {"code": "def find_max(l):\n    return max(l) if l else None", "doc": "Finds the maximum value in a list."},
+            {"code": "def save_file(data, path):\n    with open(path, 'w') as f:\n        f.write(data)", "doc": "Writes data to a file at the specified path."}
         ]
     }
 
     checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
-    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | SAMPLES: 10-10-10\n{'='*90}")
+    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | DATA SOURCE: PROCESSED\n{'='*90}")
 
     for ckpt in sorted(checkpoints):
-        print(f"\n🔍 CHECKPOINT: {ckpt}")
-        model_tag = "transformer" if "transformer" in ckpt.lower() else "lstm_attention"
+        # MAPPING DINAMICO BASATO SUI NUOVI TAG
+        if "transformer" in ckpt.lower(): model_tag = "transformer"
+        elif "lstm_dotproduct" in ckpt.lower(): model_tag = "lstm_dotproduct"
+        elif "lstm_bahdanau" in ckpt.lower(): model_tag = "lstm_bahdanau"
+        else: continue # Salta file non riconosciuti
+
+        print(f"\n🔍 CHECKPOINT: {ckpt} (Tag: {model_tag})")
         
         try:
             model = get_model_architecture(model_tag, device, vocab_size=vocab_size)
@@ -882,6 +858,7 @@ def run_deep_audit():
             model.eval()
 
             for suite_name, samples in suites.items():
+                if not samples: continue
                 print(f"\n   >>> SUITE: {suite_name}")
                 for i, s in enumerate(samples):
                     ids_input = tokenizer.encode(s['code']).ids
@@ -895,7 +872,7 @@ def run_deep_audit():
                     print(f"        PRED: {prediction}")
                     print(f"        {'-'*20}")
         except Exception as e:
-            print(f"    ❌ Error: {e}")
+            print(f"    ❌ Error analyzing {ckpt}: {e}")
 
 if __name__ == "__main__":
     run_deep_audit()
@@ -7392,7 +7369,7 @@ def foreachRDD(self, func):
 ------------------------------------------------------------------------------------------------------
 
 === DATASET PREVIEW ===
-Source File: Project/Datasets/python/final/jsonl\train\python_train_0.jsonl.gz
+Source File: C:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project\Datasets\python\final\jsonl\train\python_train_0.jsonl.gz
 
 --- SAMPLE #1 ---
 DOCSTRING: Trains a k-nearest neighbors classifier for face recognition.
@@ -11277,21 +11254,21 @@ from models.seq2seq_dotproduct import Seq2SeqDotProduct
 
 logger = logging.getLogger(__name__)
 
-def get_model_architecture(model_type, device, vocab_size=50000):
+def get_model_architecture(model_type, device, vocab_size=20000):
     """
-    FACTORY ACTUATOR: Configura e istanzia l'architettura neurale richiesta.
+    FACTORY ACTUATOR: Configures and instantiates the requested neural architecture.
     
-    PARAMETRI COMUNI:
-    - emb_dim (256): Dimensione della proiezione vettoriale dei token.
-    - hid_dim (512): Capacità dello spazio latente (Hidden State / d_model).
-    - dropout (0.1): Probabilità di dropout per la regolarizzazione.
+    COMMON PARAMETERS:
+    - emb_dim (256): Dimension of the token vector projection.
+    - hid_dim (512): Capacity of the latent space (Hidden State / d_model).
+    - dropout (0.1): Dropout probability for regularization.
     
-    PARAMETRI LSTM (Temporali):
-    - n_layers (2): Numero di strati LSTM sovrapposti.
+    LSTM PARAMETERS (Sequential):
+    - n_layers (2): Number of stacked LSTM layers.
     
-    PARAMETRI TRANSFORMER (Paralleli):
-    - nhead (8): Teste di Multi-Head Attention.
-    - transformer_layers (6): Numero di blocchi Encoder/Decoder.
+    TRANSFORMER PARAMETERS (Parallel):
+    - nhead (8): Number of Multi-Head Attention heads.
+    - transformer_layers (6): Number of Encoder/Decoder blocks.
     """
     
     params = {
@@ -11303,6 +11280,9 @@ def get_model_architecture(model_type, device, vocab_size=50000):
         "transformer_layers": 6
     }
 
+    # --- [ARCHITECTURE 1: LSTM with ADDITIVE ATTENTION (Bahdanau)] ---
+    # This architecture uses a neural network (tanh layer) to calculate alignment scores.
+    # It is computationally expensive but very robust for varying sequence lengths.
     if model_type == "lstm_bahdanau":
         logger.info(f"🏗️ Factory: Generating LSTM + Bahdanau (Additive Attention)")
         return Seq2SeqBahdanau(
@@ -11312,8 +11292,12 @@ def get_model_architecture(model_type, device, vocab_size=50000):
             n_layers=params["n_layers"], 
             dropout=params["dropout"], 
             device=device
-        ).to(device)
+        ).to(device) # Crucial: Moves the initialized model to GPU/CPU VRAM immediately.
 
+    # --- [ARCHITECTURE 2: LSTM with MULTIPLICATIVE ATTENTION (Dot-Product)] ---
+    # This architecture uses the Dot Product between vectors to calculate alignment.
+    # It is faster and more memory-efficient than Bahdanau (geometric approach),
+    # but theoretically slightly less expressive without scaling.
     elif model_type == "lstm_dotproduct":
         logger.info(f"🏗️ Factory: Generating LSTM + DotProduct (Geometric Attention)")
         return Seq2SeqDotProduct(
@@ -11325,16 +11309,22 @@ def get_model_architecture(model_type, device, vocab_size=50000):
             device=device
         ).to(device)
 
+    # --- [ARCHITECTURE 3: TRANSFORMER (Attention Is All You Need)] ---
+    # State-of-the-art architecture based entirely on Self-Attention mechanisms.
+    # Unlike LSTMs, it processes the entire sequence in parallel (non-sequential),
+    # allowing for massive parallelization on GPUs and better handling of long-range dependencies.
     elif model_type == "transformer":
         logger.info(f"⚡ Factory: Generating Transformer (Heads: {params['nhead']}, Layers: {params['transformer_layers']})")
         return Seq2SeqTransformer(
             vocab_size=vocab_size, 
-            d_model=params["hid_dim"], 
+            d_model=params["hid_dim"],  # Maps 'hid_dim' to Transformer's 'd_model'
             nhead=params["nhead"],
             num_layers=params["transformer_layers"], 
             dropout=params["dropout"]
         ).to(device)
     
+    # --- [ERROR HANDLING] ---
+    # Failsafe for incorrect configuration strings.
     else:
         logger.error(f"❌ Errore critico: Architettura '{model_type}' non supportata.")
         raise ValueError(f"Unknown model type: {model_type}")
@@ -11350,52 +11340,152 @@ import torch.nn.functional as F
 import random
 
 class BahdanauAttention(nn.Module):
+    """
+    Implements Bahdanau (Additive) Attention Mechanism.
+    """
+
     def __init__(self, hid_dim):
+        """
+        Initializes the Bahdanau Attention mechanism.
+        """
+
         super().__init__()
+
+        # Linear layer for attention score computation
         self.attn = nn.Linear(hid_dim * 2, hid_dim)
+
+        # Final linear layer to produce attention weights
         self.v = nn.Linear(hid_dim, 1, bias=False)
 
     def forward(self, hidden, encoder_outputs):
+        """
+        Computes attention weights.
+        """
+
+        # hidden: [batch_size, hid_dim]
+        # encoder_outputs: [batch_size, src_len, hid_dim]
         src_len = encoder_outputs.shape[1]
+
+        # Repeat hidden state src_len times
         hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
+
+        # Calculate energy
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
+
+        # Compute attention scores
         attention = self.v(energy).squeeze(2)
+
+        # Apply softmax to get attention weights
         return F.softmax(attention, dim=1)
 
 class Encoder(nn.Module):
+    """
+    Encodes the source sequence.
+    """
+
     def __init__(self, input_dim, emb_dim, hid_dim, n_layers, dropout):
+        """
+        Initializes the Encoder.
+        """
         super().__init__()
+
+        # Embedding layer
         self.embedding = nn.Embedding(input_dim, emb_dim)
+
+        # Recurrent layer (LSTM)
         self.rnn = nn.LSTM(emb_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
+
+        # Dropout layer
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, src):
+        """
+        Forward pass through the encoder.
+        """
+
+        # src: [batch_size, src_len]
         embedded = self.dropout(self.embedding(src))
+
+        # embedded: [batch_size, src_len, emb_dim]
         outputs, (hidden, cell) = self.rnn(embedded)
+
+        # outputs: [batch_size, src_len, hid_dim]
+        # hidden, cell: [n_layers, batch_size, hid_dim]
         return outputs, hidden, cell
 
 class Decoder(nn.Module):
+    """
+    Decodes the target sequence using attention.
+    """
+
     def __init__(self, output_dim, emb_dim, hid_dim, n_layers, dropout):
+        """
+        Initializes the Decoder with Bahdanau Attention.
+        """
         super().__init__()
+
+        # Output dimension (vocabulary size)
         self.output_dim = output_dim
+
+        # Attention mechanism
         self.attention = BahdanauAttention(hid_dim)
+
+        # Embedding layer
         self.embedding = nn.Embedding(output_dim, emb_dim)
+
+        # Recurrent layer (LSTM)
         self.rnn = nn.LSTM(emb_dim + hid_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
+
+        # Final output layer
         self.fc_out = nn.Linear(emb_dim + hid_dim * 2, output_dim)
+
+        # Dropout layer
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, input, hidden, cell, encoder_outputs):
+        """
+        Forward pass through the decoder.
+        """
+        # input: [batch_size]
+        # hidden, cell: [n_layers, batch_size, hid_dim]
         input = input.unsqueeze(1)
+
+        # input: [batch_size, 1]
+        # embedded: [batch_size, 1, emb_dim]
         embedded = self.dropout(self.embedding(input))
+
+        # Calculate attention weights
+        # a: [batch_size, 1, src_len]
         a = self.attention(hidden[-1], encoder_outputs).unsqueeze(1)
+
+        # Compute weighted sum of encoder outputs
+        # weighted: [batch_size, 1, hid_dim]
         weighted = torch.bmm(a, encoder_outputs)
+
+        # Concatenate embedded input and weighted context
+        # rnn_input: [batch_size, 1, emb_dim + hid_dim]
         rnn_input = torch.cat((embedded, weighted), dim=2)
+
+        # Pass through RNN
+        # output: [batch_size, 1, hid_dim]
+        # hidden, cell: [n_layers, batch_size, hid_dim]
         output, (hidden, cell) = self.rnn(rnn_input, (hidden, cell))
+
+        # Generate predictions
+        # prediction: [batch_size, output_dim]
         prediction = self.fc_out(torch.cat((output, weighted, embedded), dim=2))
+
         return prediction.squeeze(1), hidden, cell
 
 class Seq2SeqBahdanau(nn.Module):
+    """
+    Sequence-to-Sequence model with Bahdanau Attention.
+    """
+
     def __init__(self, vocab_size, emb_dim, hid_dim, n_layers, dropout, device):
+        """
+        Initializes the Seq2Seq model with Bahdanau Attention.
+        """
         super().__init__()
         self.encoder = Encoder(vocab_size, emb_dim, hid_dim, n_layers, dropout)
         self.decoder = Decoder(vocab_size, emb_dim, hid_dim, n_layers, dropout)
@@ -11403,14 +11493,40 @@ class Seq2SeqBahdanau(nn.Module):
         self.output_dim = vocab_size
 
     def forward(self, src, trg, teacher_forcing_ratio=0.5):
+        """
+        Forward pass through the Seq2Seq model.
+        """
+
+        # src: [batch_size, src_len]
+        # trg: [batch_size, trg_len]
         batch_size, trg_len = trg.shape[0], trg.shape[1]
+
+        # Prepare tensor to hold outputs
+        # outputs: [batch_size, trg_len, output_dim]
         outputs = torch.zeros(batch_size, trg_len, self.output_dim).to(self.device)
+
+        # Encode the source sequence
+        # encoder_outputs: [batch_size, src_len, hid_dim]
+        # hidden, cell: [n_layers, batch_size, hid_dim]
         encoder_outputs, hidden, cell = self.encoder(src)
+
+        # First input to the decoder is the <sos> tokens
         input = trg[:, 0]
+
         for t in range(1, trg_len):
+            # Decode one time step
+            # output: [batch_size, output_dim]
+            # hidden, cell: [n_layers, batch_size, hid_dim]
             output, hidden, cell = self.decoder(input, hidden, cell, encoder_outputs)
+
+            # Store output
             outputs[:, t] = output
+
+            # Decide whether to use teacher forcing
             teacher_force = random.random() < teacher_forcing_ratio
+
+            # Get the highest predicted token
+            # If teacher forcing, use actual next token as next input
             input = trg[:, t] if teacher_force else output.argmax(1)
         return outputs
 
@@ -11528,23 +11644,37 @@ class Seq2SeqTransformer(nn.Module):
         self.d_model = d_model
 
     def _generate_causal_mask(self, sz, device):
-        mask = (torch.triu(torch.ones(sz, sz, device=device)) == 1).transpose(0, 1)
-        return mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        """
+        Risoluzione Problema 2: Genera una maschera booleana coerente.
+        In PyTorch, per le maschere booleane:
+        True = NON guardare (mask out)
+        False = guarda (keep)
+        """
+        # torch.triu con diagonal=1 crea una matrice con True sopra la diagonale principale
+        mask = torch.triu(torch.ones(sz, sz, device=device), diagonal=1).bool()
+        return mask
 
     def forward(self, src, trg, **kwargs):
+        # Maschere di padding booleane (True dove c'è l'ID 0)
         src_padding_mask = (src == 0)
         tgt_padding_mask = (trg == 0)
+        
+        # Maschera causale booleana (True per i token futuri)
         tgt_mask = self._generate_causal_mask(trg.size(1), src.device)
         
         src_emb = self.pos_encoder(self.embedding(src) * math.sqrt(self.d_model))
         tgt_emb = self.pos_encoder(self.embedding(trg) * math.sqrt(self.d_model))
         
+        # Ora tutte le maschere sono di tipo Bool: il sistema è omogeneo
         output = self.transformer(
-            src_emb, tgt_emb, tgt_mask=tgt_mask,
+            src_emb, 
+            tgt_emb, 
+            tgt_mask=tgt_mask,
             src_key_padding_mask=src_padding_mask,
             tgt_key_padding_mask=tgt_padding_mask,
             memory_key_padding_mask=src_padding_mask
         )
+        
         return self.fc_out(output)
 
 ================================================================================

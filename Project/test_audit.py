@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 import json
 import gzip
 import os
@@ -7,25 +6,30 @@ import glob
 import random
 import sys
 from tokenizers import Tokenizer
-from models.factory import get_model_architecture
 
-# --- [PHASE 1] DETERMINISTIC NORMALIZATION ---
+# Risoluzione percorsi per import interni
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+from models.factory import get_model_architecture
+
+# --- [PHASE 1] DETERMINISTIC NORMALIZATION ---
+
 def clean_output(text):
-    """Removes BPE artifacts and normalizes spacing."""
+    """Rimuove artefatti BPE e normalizza la spaziatura."""
     return text.replace('Ġ', ' ').replace('  ', ' ').strip()
 
-# --- UNIVERSAL DECODING LOGIC ---
+# --- LOGICA DI DECODIFICA UNIVERSALE ---
+
 def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, device="cpu"):
     model.eval()
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
     
     with torch.no_grad():
-        if model_tag == "lstm_attention":
+        # LOGICA PER VARIANTI LSTM (Bahdanau & DotProduct condividono la struttura encoder/decoder)
+        if "lstm" in model_tag:
             encoder_outputs, hidden, cell = model.encoder(src_tensor)
             input_token = torch.LongTensor([sos_id]).to(device)
             predicted_indices = []
@@ -36,8 +40,9 @@ def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, d
                 predicted_indices.append(top1.item())
                 input_token = top1
             return predicted_indices
+        
+        # LOGICA PER TRANSFORMER
         else:
-            # Transformer logic
             ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(device)
             predicted_indices = []
             for _ in range(max_len):
@@ -48,63 +53,63 @@ def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, d
                 ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(device)], dim=1)
             return predicted_indices
 
-# --- DATA LOADING ---
+# --- DATA LOADING (Updated to Processed Directory) ---
+
 def load_samples(data_dir, split, num_samples=10):
-    search_pattern = os.path.join(data_dir, split, "*.jsonl.gz")
-    files = glob.glob(search_pattern)
-    if not files: return []
+    """Carica i campioni dai file già puliti (processed)."""
+    file_path = os.path.join(data_dir, f"{split}.jsonl.gz")
+    if not os.path.exists(file_path):
+        print(f"⚠️ File non trovato: {file_path}")
+        return []
     
     samples = []
-    random.shuffle(files)
-    for file_path in files:
-        try:
-            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-                lines = f.readlines()
-                chosen = random.sample(lines, min(num_samples - len(samples), len(lines)))
-                for c in chosen:
-                    item = json.loads(c)
-                    samples.append({
-                        'code': item.get('code', item.get('func_code_string', '')),
-                        'doc': item.get('docstring', item.get('func_documentation_string', ''))
-                    })
-            if len(samples) >= num_samples: break
-        except: continue
-    return samples[:num_samples]
+    try:
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            lines = f.readlines()
+            chosen = random.sample(lines, min(num_samples, len(lines)))
+            for c in chosen:
+                item = json.loads(c)
+                samples.append({
+                    'code': item.get('code', ''),
+                    'doc': item.get('docstring', '')
+                })
+    except Exception as e:
+        print(f"❌ Errore caricamento campioni: {e}")
+    return samples
 
 # --- CORE AUDIT ENGINE ---
+
 def run_deep_audit():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer_path = os.path.join(project_root, "tokenizer.json")
     checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
-    data_root = os.path.join(project_root, "Datasets", "python", "final", "jsonl")
+    
+    # PUNTA ALLA CARTELLA PROCESSED (Decisione Architetturale corretta)
+    data_root = os.path.join(project_root, "Datasets", "processed")
 
     tokenizer = Tokenizer.from_file(tokenizer_path)
     vocab_size = tokenizer.get_vocab_size()
     
-    # --- SUITE 10-10-10 ALIGNMENT ---
     suites = {
         "TRAIN (Memorization)": load_samples(data_root, "train", 10),
         "TEST (Generalization)": load_samples(data_root, "test", 10),
-        "CUSTOM (High Complexity Alignment)": [
-            {"code": "def load_config(path):\n    with open(path, 'r') as f:\n        return json.load(f)", "doc": "Loads a configuration file from a JSON path."},
-            {"code": "def get_db_connection(url):\n    try:\n        return create_engine(url).connect()\n    except Exception as e:\n        raise ConnectionError(e)", "doc": "Establishes a connection to the database or raises error."},
-            {"code": "def process_image_batch(images, size):\n    return [cv2.resize(img, size) for img in images]", "doc": "Resizes a batch of images to a specific dimension."},
-            {"code": "def calculate_rdd_mean(rdd):\n    return rdd.map(lambda x: (x, 1)).reduce(lambda a, b: (a[0]+b[0], a[1]+b[1]))", "doc": "Computes the mean of an RDD using map and reduce."},
-            {"code": "def detect_faces_cnn(img):\n    return cnn_face_detector(img, upsample_num=1)", "doc": "Uses a CNN model to detect human faces in an image."},
-            {"code": "def walk_dir_tree(root):\n    for root, dirs, files in os.walk(root):\n        yield files", "doc": "Recursively yields files from a directory tree structure."},
-            {"code": "def apply_mask(tensor, mask_val=0):\n    return tensor.masked_fill(tensor == mask_val, float('-inf'))", "doc": "Applies a padding mask to a given input tensor."},
-            {"code": "def validate_token_auth(token):\n    if not token.startswith('Bearer '):\n        return False\n    return verify_jwt(token)", "doc": "Verifies if the provided token is a valid JWT Bearer."},
-            {"code": "def serialize_row_as_dict(row):\n    return {field: getattr(row, field) for field in row.__fields__}", "doc": "Converts a dataset row object into a standard dictionary."},
-            {"code": "def compute_euclidean_dist(a, b):\n    return np.linalg.norm(a - b, axis=1)", "doc": "Calculates the euclidean distance between two numpy arrays."}
+        "CUSTOM (Complex logic)": [
+            {"code": "def find_max(l):\n    return max(l) if l else None", "doc": "Finds the maximum value in a list."},
+            {"code": "def save_file(data, path):\n    with open(path, 'w') as f:\n        f.write(data)", "doc": "Writes data to a file at the specified path."}
         ]
     }
 
     checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
-    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | SAMPLES: 10-10-10\n{'='*90}")
+    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | DATA SOURCE: PROCESSED\n{'='*90}")
 
     for ckpt in sorted(checkpoints):
-        print(f"\n🔍 CHECKPOINT: {ckpt}")
-        model_tag = "transformer" if "transformer" in ckpt.lower() else "lstm_attention"
+        # MAPPING DINAMICO BASATO SUI NUOVI TAG
+        if "transformer" in ckpt.lower(): model_tag = "transformer"
+        elif "lstm_dotproduct" in ckpt.lower(): model_tag = "lstm_dotproduct"
+        elif "lstm_bahdanau" in ckpt.lower(): model_tag = "lstm_bahdanau"
+        else: continue # Salta file non riconosciuti
+
+        print(f"\n🔍 CHECKPOINT: {ckpt} (Tag: {model_tag})")
         
         try:
             model = get_model_architecture(model_tag, device, vocab_size=vocab_size)
@@ -112,6 +117,7 @@ def run_deep_audit():
             model.eval()
 
             for suite_name, samples in suites.items():
+                if not samples: continue
                 print(f"\n   >>> SUITE: {suite_name}")
                 for i, s in enumerate(samples):
                     ids_input = tokenizer.encode(s['code']).ids
@@ -125,7 +131,7 @@ def run_deep_audit():
                     print(f"        PRED: {prediction}")
                     print(f"        {'-'*20}")
         except Exception as e:
-            print(f"    ❌ Error: {e}")
+            print(f"    ❌ Error analyzing {ckpt}: {e}")
 
 if __name__ == "__main__":
     run_deep_audit()
