@@ -12,7 +12,7 @@ print("--- [FASE 1] MOUNT E MAPPATURA PERCORSI ---")
 drive.mount('/content/drive', force_remount=True)
 
 # Percorso validato dallo Scanner (Chirurgicamente esatto)
-PROJECT_ROOT = "/content/drive/MyDrive/LifeLineV4/PROGETTI/Universita/Software_Science_And_Technology/MACHINE LEARNING FOR SOFTWARE ANALYSIS/PROJECT__MLSA_MMA/COLAB/Project_MLSA_MMA/Project"
+PROJECT_ROOT = "/content/drive/MyDrive/LifeLineV4/PROGETTI/Universita/Software_Science_And_Technology/MACHINE LEARNING FOR SOFTWARE ANALYSIS/PROJECT__MLSA_MMA/COLAB_Marco/Project_MLSA_MMA/Project"
 
 if not os.path.exists(PROJECT_ROOT):
     print(f"❌ ERRORE CRITICO: Il percorso {PROJECT_ROOT} non esiste.")
@@ -34,20 +34,26 @@ if device == "cuda":
 else:
     print("⚠️ ATTENZIONE: GPU NON RILEVATA! Controlla 'Runtime -> Cambia tipo di runtime'.")
 
-# 3. PROVISIONING DIPENDENZE
+# 3. PROVISIONING DIPENDENZE (Ambiente Isolato)
 print("\n--- [FASE 3] INSTALLAZIONE STRUMENTI ---")
 !pip install tokenizers tqdm nltk rouge-score -q
 
-# 4. ESECUZIONE ORCHESTRATORE 
-# --subset 50000: Massa critica per eliminare il bias "DataFrame"
-# --batch_size 128: Saturazione ottimale per GPU T4 con AMP (Automatic Mixed Precision)
-# --epochs 10: Finestra di convergenza standard
-# --force_train: Ignora eventuali residui e crea un nuovo file versionato
+# 4. ESECUZIONE ORCHESTRATORE (L'Attacco Finale)
+# Nota Ingegneristica: Decommenta SOLO la riga dell'esperimento desiderato.
+# I parametri sono calibrati per saturare la VRAM di una Tesla T4 senza crash.
+
 print("\n--- [FASE 4] AVVIO ADDESTRAMENTO PESANTE ---")
-!python C2Orchestrator.py \
-    --subset 50000 \
-    --epochs 5 \
-    --batch_size 128 \
-    --force_train
+
+# --- OPZIONE A: TRANSFORMER (Il Titano Parallelo) ---
+# Ideale per catturare relazioni a lungo raggio nel codice.
+!python C2Orchestrator.py --mode train --model transformer --subset 50000 --epochs 10 --batch_size 128 --evaluation fast
+
+# --- OPZIONE B: LSTM + BAHDANAU (Attenzione Additiva) ---
+# Il modello "Sarto" che impara dinamicamente dove guardare.
+#!python C2Orchestrator.py --mode train --model lstm_bahdanau --subset 50000 --epochs 10 --batch_size 64 --evaluation fast
+
+# --- OPZIONE C: LSTM + DOTPRODUCT (Attenzione del Prof) ---
+# Implementazione basata sul prodotto scalare scalato (Scaled Dot-Product).
+#!python C2Orchestrator.py --mode train --model lstm_dotproduct --subset 50000 --epochs 10 --batch_size 64 --evaluation fast
 
 print("\n--- PIPELINE COMPLETATA CON SUCCESSO ---")
