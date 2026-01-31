@@ -20,23 +20,38 @@ def clean_output(text):
     """Rimuove artefatti BPE e normalizza la spaziatura."""
     return text.replace('Ġ', ' ').replace('  ', ' ').strip()
 
-# --- LOGICA DI DECODIFICA UNIVERSALE ---
+# --- UNIVERSAL DECODING LOGIC WITH REPETITION PENALTY ---
 
-def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, device="cpu"):
+def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, device="cpu", penalty=2.0):
+    """
+    Decodifica autoregressiva con Repetition Penalty.
+    penalty > 0: riduce i logit dei token già visti.
+    """
     model.eval()
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
+    pad_id = tokenizer.token_to_id("<PAD>")
     
+    predicted_indices = []
+
     with torch.no_grad():
-        # LOGICA PER VARIANTI LSTM (Bahdanau & DotProduct condividono la struttura encoder/decoder)
+        # LOGICA PER VARIANTI LSTM
         if "lstm" in model_tag:
             encoder_outputs, hidden, cell = model.encoder(src_tensor)
             input_token = torch.LongTensor([sos_id]).to(device)
-            predicted_indices = []
+            
             for _ in range(max_len):
                 output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
+                # output shape: [1, vocab_size]
+                
+                # Applica penalità ai token già predetti (escludendo token strutturali se necessario)
+                for idx in set(predicted_indices):
+                    if idx not in [sos_id, eos_id, pad_id]:
+                        output[0, idx] -= penalty 
+                
                 top1 = output.argmax(1)
                 if top1.item() == eos_id: break
+                
                 predicted_indices.append(top1.item())
                 input_token = top1
             return predicted_indices
@@ -44,19 +59,25 @@ def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, d
         # LOGICA PER TRANSFORMER
         else:
             ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(device)
-            predicted_indices = []
             for _ in range(max_len):
                 out = model(src_tensor, ys)
-                next_word = out[:, -1].argmax(1).item()
+                logits = out[:, -1, :] # Prendi l'ultimo step
+                
+                # Applica penalità
+                for idx in set(predicted_indices):
+                    if idx not in [sos_id, eos_id, pad_id]:
+                        logits[0, idx] -= penalty
+                
+                next_word = logits.argmax(1).item()
                 if next_word == eos_id: break
+                
                 predicted_indices.append(next_word)
                 ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(device)], dim=1)
             return predicted_indices
 
-# --- DATA LOADING (Updated to Processed Directory) ---
+# --- DATA LOADING ---
 
 def load_samples(data_dir, split, num_samples=10):
-    """Carica i campioni dai file già puliti (processed)."""
     file_path = os.path.join(data_dir, f"{split}.jsonl.gz")
     if not os.path.exists(file_path):
         print(f"⚠️ File non trovato: {file_path}")
@@ -83,9 +104,11 @@ def run_deep_audit():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer_path = os.path.join(project_root, "tokenizer.json")
     checkpoint_dir = os.path.join(project_root, "models", "checkpoints")
-    
-    # PUNTA ALLA CARTELLA PROCESSED (Decisione Architetturale corretta)
     data_root = os.path.join(project_root, "Datasets", "processed")
+
+    if not os.path.exists(tokenizer_path):
+        print(f"❌ Errore: Tokenizer non trovato in {tokenizer_path}")
+        return
 
     tokenizer = Tokenizer.from_file(tokenizer_path)
     vocab_size = tokenizer.get_vocab_size()
@@ -100,14 +123,13 @@ def run_deep_audit():
     }
 
     checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
-    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | DATA SOURCE: PROCESSED\n{'='*90}")
+    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | SOURCE: PROCESSED | PENALTY: ON\n{'='*90}")
 
     for ckpt in sorted(checkpoints):
-        # MAPPING DINAMICO BASATO SUI NUOVI TAG
         if "transformer" in ckpt.lower(): model_tag = "transformer"
         elif "lstm_dotproduct" in ckpt.lower(): model_tag = "lstm_dotproduct"
         elif "lstm_bahdanau" in ckpt.lower(): model_tag = "lstm_bahdanau"
-        else: continue # Salta file non riconosciuti
+        else: continue
 
         print(f"\n🔍 CHECKPOINT: {ckpt} (Tag: {model_tag})")
         
@@ -123,7 +145,8 @@ def run_deep_audit():
                     ids_input = tokenizer.encode(s['code']).ids
                     src_tensor = torch.LongTensor([1] + ids_input + [2]).unsqueeze(0).to(device)
                     
-                    ids_pred = autoregressive_decode(model, src_tensor, tokenizer, model_tag, device=device)
+                    # Chiamata con Repetition Penalty
+                    ids_pred = autoregressive_decode(model, src_tensor, tokenizer, model_tag, device=device, penalty=2.5)
                     prediction = clean_output(tokenizer.decode(ids_pred, skip_special_tokens=True))
                     
                     print(f"    S#{i+1} | CODE: {s['code'].strip().replace('\\n', ' ')[:45]}...")

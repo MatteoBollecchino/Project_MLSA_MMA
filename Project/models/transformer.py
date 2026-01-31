@@ -1,14 +1,16 @@
 """
-TRANSFORMER REVISION - Version 2.1
-----------------------------------
-OBIETTIVO: Risolvere il collasso delle metriche senza modificare train.py.
-
-MODIFICHE:
-1. INTERNAL SHIFTING: Il modello taglia l'ultimo token di 'trg' per l'input 
-   e aggiunge un padding in testa all'output per mantenere la forma [Batch, Seq_Len, Vocab].
-2. SCALING FACTOR: Moltiplicazione per sqrt(d_model) per prevenire la saturazione della Softmax.
-3. SINUSOIDAL POSITIONAL ENCODING: Sostituito il parametro addestrabile con segnali fissi.
-4. MASKING BUG FIX: Corretta la gestione delle maschere di padding per l'encoder (memory_mask).
+TRANSFORMER REVISION - Version 2.5 (Final CTO Release)
+------------------------------------------------------
+MODIFICHE CHIRURGICHE APPORTATE:
+1. CONDITIONAL SHIFTING: Inserito controllo self.training. Durante il training
+   il modello sfasera i target internamente per impedire il 'peeking'. In audit,
+   accetta la sequenza intera per permettere la generazione autoregressiva.
+2. DUMMY PADDING (Alignment): Durante il training, l'output viene esteso con un 
+   prefisso vuoto per mantenere la compatibilità con la riga output[:, 1:] di train.py.
+3. SCALING ATTENTION: Moltiplicazione degli embedding per sqrt(d_model) per
+   evitare la saturazione della Softmax: $$Attention(Q,K,V) = softmax(\frac{QK^T}{\sqrt{d_k}})V$$
+4. FIXED POSITIONAL ENCODING: Bussola geometrica sinusoidale fissa per la stabilità.
+5. MEMORY MASKING: Corretto l'uso di memory_key_padding_mask per ignorare il pad dell'encoder.
 """
 
 import torch
@@ -52,38 +54,44 @@ class Seq2SeqTransformer(nn.Module):
         return torch.triu(torch.ones(sz, sz, device=device), diagonal=1).bool()
 
     def forward(self, src, trg, **kwargs):
-        # 1. --- INTERNAL SHIFTING LOGIC ---
-        # Prendiamo tutto tranne l'ultimo token per l'input del decoder (include <SOS>)
-        # trg_input: [Batch, Seq_Len - 1]
-        trg_input = trg[:, :-1]
+        # 1. --- STRATEGIA DI SFASAMENTO CONDIZIONALE ---
+        if self.training:
+            # Durante il training, 'trg' è la sequenza completa.
+            # Tagliamo l'ultimo token per l'input del decoder per non 'barare'.
+            trg_input = trg[:, :-1]
+        else:
+            # Durante l'audit/inferenza, 'trg' è la sequenza parziale generata finora.
+            # Usiamo tutto l'input fornito senza tagli.
+            trg_input = trg
         
-        # 2. GENERAZIONE MASCHERE
+        # 2. GENERAZIONE MASCHERE PADDING E CAUSALI
         src_key_padding_mask = (src == 0)
         tgt_key_padding_mask = (trg_input == 0)
         tgt_mask = self._generate_causal_mask(trg_input.size(1), src.device)
         
-        # 3. EMBEDDING + SCALING + POSITION
-        # math.sqrt(d_model) è l'iniezione di stabilità numerica mancante
+        # 3. TRASFORMAZIONE NELLO SPAZIO LATENTE
+        # Scaling con sqrt(d_model) fondamentale per mantenere i gradienti sani
         src_emb = self.pos_encoder(self.embedding(src) * math.sqrt(self.d_model))
         tgt_emb = self.pos_encoder(self.embedding(trg_input) * math.sqrt(self.d_model))
         
-        # 4. TRASFORMER EXECUTION
+        # 4. ESECUZIONE DEL CORE TRANSFORMER
         output = self.transformer(
             src_emb, tgt_emb, tgt_mask=tgt_mask,
             src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=tgt_key_padding_mask,
-            memory_key_padding_mask=src_key_padding_mask # Impedisce di guardare il pad dell'encoder
+            memory_key_padding_mask=src_key_padding_mask # Filtra il rumore dell'encoder
         )
         
-        # 5. PROIEZIONE FINALE
-        # predictions shape: [Batch, Seq_Len - 1, Vocab]
+        # 5. PROIEZIONE SUL VOCABOLARIO
         predictions = self.fc_out(output)
         
-        # 6. --- ALIGNMENT CON train.py ---
-        # Per non cambiare train.py, dobbiamo restituire una sequenza di lunghezza originale.
-        # Aggiungiamo un dummy token all'inizio (che verrà scartato da train.py tramite output[:, 1:])
-        batch_size = src.size(0)
-        dummy_prefix = torch.zeros(batch_size, 1, self.vocab_size).to(src.device)
-        
-        # Ritorna [Batch, Seq_Len, Vocab]
-        return torch.cat([dummy_prefix, predictions], dim=1)
+        # 6. --- RIFINITURA PER L'ORCHESTRATORE ---
+        if self.training:
+            # Per non modificare train.py, dobbiamo restituire una sequenza di lunghezza pari a 'trg'.
+            # Aggiungiamo un prefisso di zeri che verrà ignorato dalla CrossEntropyLoss.
+            batch_size = src.size(0)
+            dummy_prefix = torch.zeros(batch_size, 1, self.vocab_size).to(src.device)
+            return torch.cat([dummy_prefix, predictions], dim=1)
+        else:
+            # In Audit restituiamo le predizioni pure per la decodifica autoregressiva.
+            return predictions
