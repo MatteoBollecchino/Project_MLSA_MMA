@@ -29,21 +29,17 @@ class BatchEvaluator:
         self.results = []
 
     def beam_decode(self, model, src, model_tag, beam_width=3, max_len=30):
-        """
-        Implementazione di Beam Search per gestire l'incertezza statistica.
-        """
         sos_id = self.tokenizer.token_to_id("<SOS>")
         eos_id = self.tokenizer.token_to_id("<EOS>")
         
-        # Ogni beam: (sequenza_id, punteggio_log, hidden, cell)
         if "lstm" in model_tag:
             encoder_outputs, hidden, cell = model.encoder(src)
             beams = [([sos_id], 0.0, hidden, cell)]
         else:
-            # Transformer logic
+            # TRANSFORMER BEAM INIT
             beams = [([sos_id], 0.0)]
 
-        for _ in range(max_len):
+        for step in range(max_len):
             new_candidates = []
             for b in beams:
                 if "lstm" in model_tag:
@@ -51,41 +47,41 @@ class BatchEvaluator:
                 else:
                     seq, score = b
                 
-                # Se il fascio è già finito, lo manteniamo così
                 if seq[-1] == eos_id:
                     new_candidates.append(b)
                     continue
                 
-                # Predizione prossimo token
-                if "lstm" in model_tag:
-                    input_token = torch.LongTensor([seq[-1]]).to(self.device)
-                    output, next_h, next_c = model.decoder(input_token, h, c, encoder_outputs)
-                else:
-                    input_tensor = torch.LongTensor([seq]).to(self.device)
-                    output = model(src, input_tensor)[:, -1, :]
-                
-                # Calcolo log-probabilità per stabilità numerica
-                log_probs = F.log_softmax(output, dim=-1)
-                top_v, top_i = log_probs.topk(beam_width)
-                
-                for i in range(beam_width):
-                    next_token = top_i[0, i].item()
-                    new_score = score + top_v[0, i].item()
+                try:
                     if "lstm" in model_tag:
-                        new_candidates.append((seq + [next_token], new_score, next_h, next_c))
+                        input_token = torch.LongTensor([seq[-1]]).to(self.device)
+                        output, next_h, next_c = model.decoder(input_token, h, c, encoder_outputs)
                     else:
-                        new_candidates.append((seq + [next_token], new_score))
+                        input_tensor = torch.LongTensor([seq]).to(self.device)
+                        output = model(src, input_tensor)[:, -1, :]
+                    
+                    log_probs = F.log_softmax(output, dim=-1)
+                    top_v, top_i = log_probs.topk(beam_width)
+                    
+                    for i in range(beam_width):
+                        next_token = top_i[0, i].item()
+                        new_score = score + top_v[0, i].item()
+                        if "lstm" in model_tag:
+                            new_candidates.append((seq + [next_token], new_score, next_h, next_c))
+                        else:
+                            new_candidates.append((seq + [next_token], new_score))
+                except Exception as e:
+                    # Se crasha qui, il problema è nella forward pass del modello
+                    logger.error(f"❌ Errore durante Beam Search al passo {step}: {e}")
+                    raise e
             
-            # Selezione dei migliori K candidati tra tutti quelli espansi
             beams = sorted(new_candidates, key=lambda x: x[1], reverse=True)[:beam_width]
-            
-            # Condizione di uscita anticipata: tutti i fasci hanno trovato <EOS>
             if all(b[0][-1] == eos_id for b in beams):
                 break
                 
-        return beams[0][0] # Restituiamo la sequenza del miglior fascio
+        return beams[0][0]
 
     def evaluate_single_checkpoint(self, checkpoint_name):
+        # --- [MAPPING LOGIC] ---
         if "transformer" in checkpoint_name.lower():
             model_tag = "transformer"
         elif "lstm_dotproduct" in checkpoint_name.lower():
@@ -95,33 +91,44 @@ class BatchEvaluator:
 
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
         
+        print(f"\n🧪 Testing Model: {model_tag} | File: {checkpoint_name}")
+        
         try:
+            # 1. ARCHITECTURE MATCHING
             model = get_model_architecture(model_tag, self.device, vocab_size=self.vocab_size)
-            model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+            
+            # 2. WEIGHT LOADING (Punto critico di crash)
+            state_dict = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
+            model.load_state_dict(state_dict)
             model.eval()
+            print(f"✅ Checkpoint caricato con successo.")
         except Exception as e:
-            return {"file": checkpoint_name, "error": f"Load error: {str(e)}"}
+            print(f"❌ ERRORE CARICAMENTO [{model_tag}]: {e}")
+            return {"file": checkpoint_name, "error": str(e)}
         
         test_loader = get_dataloader(self.data_path, "test", self.tokenizer_path, batch_size=1, subset=self.subset_size)
         references, hypotheses = [], []
 
         with torch.no_grad():
-            for src, trg in tqdm(test_loader, desc=f"Audit {model_tag} (BEAM)", leave=False):
-                src = src.to(self.device)
-                
-                # Esecuzione Beam Search (larghezza 3 è un ottimo compromesso)
-                predicted_indices = self.beam_decode(model, src, model_tag, beam_width=3)
-
-                pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
-                real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
-                
-                hypotheses.append(pred_text.split())
-                references.append([real_text.split()])
+            try:
+                for src, trg in tqdm(test_loader, desc=f"Audit {model_tag}", leave=False):
+                    src = src.to(self.device)
+                    predicted_indices = self.beam_decode(model, src, model_tag, beam_width=3)
+                    
+                    pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
+                    real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
+                    
+                    hypotheses.append(pred_text.split())
+                    references.append([real_text.split()])
+            except Exception as e:
+                print(f"❌ ERRORE INFERENZA [{model_tag}]: {e}")
+                return {"file": checkpoint_name, "error": str(e)}
 
         # Calcolo BLEU e ROUGE
         bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
         scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
-        rougeL = sum(scorer.score(" ".join(r[0]), " ".join(h))['rougeL'].fmeasure for h, r in zip(hypotheses, references)) / len(hypotheses)
+        total_rouge = sum(scorer.score(" ".join(r[0]), " ".join(h))['rougeL'].fmeasure for h, r in zip(hypotheses, references))
+        rougeL = total_rouge / len(hypotheses) if hypotheses else 0
         
         return {"file": checkpoint_name, "model": model_tag, "bleu": bleu, "rougeL": rougeL}
 
@@ -129,9 +136,13 @@ class BatchEvaluator:
         files = [specific_file] if specific_file else [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
         if not files: return None
 
-        print(f"\n🚀 Analisi Metriche su {len(files)} modello/i (Beam Search: ACTIVE)...")
+        print(f"\n🚀 START BATCH EVALUATION (Beam Search k=3)")
         for ckpt in sorted(files):
             res = self.evaluate_single_checkpoint(ckpt)
-            if "error" not in res: self.results.append(res)
+            # Aggiungiamo alla lista solo se non c'è errore per non sporcare il DataFrame
+            if "error" not in res: 
+                self.results.append(res)
+            else:
+                print(f"⚠️ Modello {ckpt} saltato causa errore.")
         
         return pd.DataFrame(self.results)
