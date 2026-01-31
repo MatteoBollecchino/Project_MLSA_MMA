@@ -3,6 +3,7 @@ import os
 import torch
 import logging
 import pandas as pd
+import torch.nn.functional as F
 from tqdm import tqdm
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 from rouge_score import rouge_scorer
@@ -27,8 +28,64 @@ class BatchEvaluator:
         self.subset_size = subset_size
         self.results = []
 
-    def evaluate_single_checkpoint(self, checkpoint_name, penalty=2.0):
-        # --- [MAPPING LOGIC] ---
+    def beam_decode(self, model, src, model_tag, beam_width=3, max_len=30):
+        """
+        Implementazione di Beam Search per gestire l'incertezza statistica.
+        """
+        sos_id = self.tokenizer.token_to_id("<SOS>")
+        eos_id = self.tokenizer.token_to_id("<EOS>")
+        
+        # Ogni beam: (sequenza_id, punteggio_log, hidden, cell)
+        if "lstm" in model_tag:
+            encoder_outputs, hidden, cell = model.encoder(src)
+            beams = [([sos_id], 0.0, hidden, cell)]
+        else:
+            # Transformer logic
+            beams = [([sos_id], 0.0)]
+
+        for _ in range(max_len):
+            new_candidates = []
+            for b in beams:
+                if "lstm" in model_tag:
+                    seq, score, h, c = b
+                else:
+                    seq, score = b
+                
+                # Se il fascio è già finito, lo manteniamo così
+                if seq[-1] == eos_id:
+                    new_candidates.append(b)
+                    continue
+                
+                # Predizione prossimo token
+                if "lstm" in model_tag:
+                    input_token = torch.LongTensor([seq[-1]]).to(self.device)
+                    output, next_h, next_c = model.decoder(input_token, h, c, encoder_outputs)
+                else:
+                    input_tensor = torch.LongTensor([seq]).to(self.device)
+                    output = model(src, input_tensor)[:, -1, :]
+                
+                # Calcolo log-probabilità per stabilità numerica
+                log_probs = F.log_softmax(output, dim=-1)
+                top_v, top_i = log_probs.topk(beam_width)
+                
+                for i in range(beam_width):
+                    next_token = top_i[0, i].item()
+                    new_score = score + top_v[0, i].item()
+                    if "lstm" in model_tag:
+                        new_candidates.append((seq + [next_token], new_score, next_h, next_c))
+                    else:
+                        new_candidates.append((seq + [next_token], new_score))
+            
+            # Selezione dei migliori K candidati tra tutti quelli espansi
+            beams = sorted(new_candidates, key=lambda x: x[1], reverse=True)[:beam_width]
+            
+            # Condizione di uscita anticipata: tutti i fasci hanno trovato <EOS>
+            if all(b[0][-1] == eos_id for b in beams):
+                break
+                
+        return beams[0][0] # Restituiamo la sequenza del miglior fascio
+
+    def evaluate_single_checkpoint(self, checkpoint_name):
         if "transformer" in checkpoint_name.lower():
             model_tag = "transformer"
         elif "lstm_dotproduct" in checkpoint_name.lower():
@@ -45,55 +102,15 @@ class BatchEvaluator:
         except Exception as e:
             return {"file": checkpoint_name, "error": f"Load error: {str(e)}"}
         
-        test_loader = get_dataloader(
-            self.data_path, "test", 
-            self.tokenizer_path, batch_size=1, subset=self.subset_size
-        )
-
+        test_loader = get_dataloader(self.data_path, "test", self.tokenizer_path, batch_size=1, subset=self.subset_size)
         references, hypotheses = [], []
-        sos_id = self.tokenizer.token_to_id("<SOS>")
-        eos_id = self.tokenizer.token_to_id("<EOS>")
-        pad_id = self.tokenizer.token_to_id("<PAD>")
 
         with torch.no_grad():
-            for src, trg in tqdm(test_loader, desc=f"Audit {model_tag}", leave=False):
+            for src, trg in tqdm(test_loader, desc=f"Audit {model_tag} (BEAM)", leave=False):
                 src = src.to(self.device)
-                predicted_indices = []
-
-                # --- [INFERENCE LOGIC: LSTM VARIANTS] ---
-                if "lstm" in model_tag:
-                    encoder_outputs, hidden, cell = model.encoder(src)
-                    input_token = torch.LongTensor([sos_id]).to(self.device)
-
-                    for _ in range(30):
-                        output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
-                        
-                        # --- PENALTY INJECTION ---
-                        for idx in set(predicted_indices):
-                            if idx not in [sos_id, eos_id, pad_id]:
-                                output[0, idx] -= penalty 
-                        
-                        top1 = output.argmax(1)
-                        if top1.item() == eos_id: break
-                        predicted_indices.append(top1.item())
-                        input_token = top1
                 
-                # --- [INFERENCE LOGIC: TRANSFORMER] ---
-                else:
-                    ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(self.device)
-                    for _ in range(30):
-                        out = model(src, ys)
-                        logits = out[:, -1, :] 
-                        
-                        # --- PENALTY INJECTION ---
-                        for idx in set(predicted_indices):
-                            if idx not in [sos_id, eos_id, pad_id]:
-                                logits[0, idx] -= penalty
-
-                        next_word = logits.argmax(1).item()
-                        if next_word == eos_id: break
-                        predicted_indices.append(next_word)
-                        ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(self.device)], dim=1)
+                # Esecuzione Beam Search (larghezza 3 è un ottimo compromesso)
+                predicted_indices = self.beam_decode(model, src, model_tag, beam_width=3)
 
                 pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
                 real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
@@ -101,16 +118,10 @@ class BatchEvaluator:
                 hypotheses.append(pred_text.split())
                 references.append([real_text.split()])
 
-        # Calcolo Metriche
+        # Calcolo BLEU e ROUGE
         bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
         scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
-        
-        # Protezione divisione per zero se tutte le predizioni sono vuote
-        total_rouge = 0
-        for h, r in zip(hypotheses, references):
-            score = scorer.score(" ".join(r[0]), " ".join(h))
-            total_rouge += score['rougeL'].fmeasure
-        rougeL = total_rouge / len(hypotheses) if hypotheses else 0
+        rougeL = sum(scorer.score(" ".join(r[0]), " ".join(h))['rougeL'].fmeasure for h, r in zip(hypotheses, references)) / len(hypotheses)
         
         return {"file": checkpoint_name, "model": model_tag, "bleu": bleu, "rougeL": rougeL}
 
@@ -118,7 +129,7 @@ class BatchEvaluator:
         files = [specific_file] if specific_file else [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
         if not files: return None
 
-        print(f"\n🚀 Analisi Metriche su {len(files)} modello/i (Penalty: ACTIVE)...")
+        print(f"\n🚀 Analisi Metriche su {len(files)} modello/i (Beam Search: ACTIVE)...")
         for ckpt in sorted(files):
             res = self.evaluate_single_checkpoint(ckpt)
             if "error" not in res: self.results.append(res)

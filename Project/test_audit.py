@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import json
 import gzip
 import os
@@ -20,60 +21,81 @@ def clean_output(text):
     """Rimuove artefatti BPE e normalizza la spaziatura."""
     return text.replace('Ġ', ' ').replace('  ', ' ').strip()
 
-# --- UNIVERSAL DECODING LOGIC WITH REPETITION PENALTY ---
+# --- BEAM SEARCH DECODING LOGIC ---
 
-def autoregressive_decode(model, src_tensor, tokenizer, model_tag, max_len=40, device="cpu", penalty=2.0):
+def beam_search_decode(model, src_tensor, tokenizer, model_tag, beam_width=5, max_len=40, device="cpu", penalty=2.0):
     """
-    Decodifica autoregressiva con Repetition Penalty.
-    penalty > 0: riduce i logit dei token già visti.
+    Ricerca a fascio (Beam Search) per esplorare percorsi multipli.
+    Ottimizzato per gestire sia LSTM che Transformer.
     """
     model.eval()
     sos_id = tokenizer.token_to_id("<SOS>")
     eos_id = tokenizer.token_to_id("<EOS>")
     pad_id = tokenizer.token_to_id("<PAD>")
     
-    predicted_indices = []
+    # Inizializzazione fasci: (sequenza, score, hidden, cell)
+    # Lo score è in log-space (inizialmente 0.0)
+    if "lstm" in model_tag:
+        with torch.no_grad():
+            encoder_outputs, hidden, cell = model.encoder(src_tensor)
+        beams = [([sos_id], 0.0, hidden, cell)]
+    else:
+        # Per il Transformer passiamo solo seq e score
+        beams = [([sos_id], 0.0)]
+        encoder_outputs = None
 
     with torch.no_grad():
-        # LOGICA PER VARIANTI LSTM
-        if "lstm" in model_tag:
-            encoder_outputs, hidden, cell = model.encoder(src_tensor)
-            input_token = torch.LongTensor([sos_id]).to(device)
+        for _ in range(max_len):
+            all_candidates = []
             
-            for _ in range(max_len):
-                output, hidden, cell = model.decoder(input_token, hidden, cell, encoder_outputs)
-                # output shape: [1, vocab_size]
+            for b in beams:
+                if "lstm" in model_tag:
+                    seq, score, h, c = b
+                else:
+                    seq, score = b
                 
-                # Applica penalità ai token già predetti (escludendo token strutturali se necessario)
-                for idx in set(predicted_indices):
+                # Se il fascio è già terminato, lo manteniamo come candidato
+                if seq[-1] == eos_id:
+                    all_candidates.append(b)
+                    continue
+                
+                # Predizione prossimo token
+                if "lstm" in model_tag:
+                    input_token = torch.LongTensor([seq[-1]]).to(device)
+                    output, next_h, next_c = model.decoder(input_token, h, c, encoder_outputs)
+                else:
+                    input_tensor = torch.LongTensor([seq]).to(device)
+                    # La forward del Transformer restituisce l'intera sequenza
+                    output = model(src_tensor, input_tensor)[:, -1, :] 
+                
+                # Log-Softmax per stabilità numerica (sommiamo i log invece di moltiplicare)
+                log_probs = F.log_softmax(output, dim=-1).squeeze(0)
+                
+                # Applichiamo la Repetition Penalty sottraendo dai log-probs
+                for idx in set(seq):
                     if idx not in [sos_id, eos_id, pad_id]:
-                        output[0, idx] -= penalty 
+                        log_probs[idx] -= penalty
                 
-                top1 = output.argmax(1)
-                if top1.item() == eos_id: break
+                # Prendiamo i migliori candidati per questo fascio specifico
+                top_log_probs, top_indices = log_probs.topk(beam_width)
                 
-                predicted_indices.append(top1.item())
-                input_token = top1
-            return predicted_indices
-        
-        # LOGICA PER TRANSFORMER
-        else:
-            ys = torch.ones(1, 1).fill_(sos_id).type(torch.long).to(device)
-            for _ in range(max_len):
-                out = model(src_tensor, ys)
-                logits = out[:, -1, :] # Prendi l'ultimo step
+                for i in range(beam_width):
+                    next_token = top_indices[i].item()
+                    new_score = score + top_log_probs[i].item()
+                    
+                    if "lstm" in model_tag:
+                        all_candidates.append((seq + [next_token], new_score, next_h, next_c))
+                    else:
+                        all_candidates.append((seq + [next_token], new_score))
+            
+            # Selezione globale: ordiniamo tutti i candidati e teniamo i top K
+            beams = sorted(all_candidates, key=lambda x: x[1], reverse=True)[:beam_width]
+            
+            # Se tutti i fasci hanno toccato EOS, usciamo
+            if all(b[0][-1] == eos_id for b in beams):
+                break
                 
-                # Applica penalità
-                for idx in set(predicted_indices):
-                    if idx not in [sos_id, eos_id, pad_id]:
-                        logits[0, idx] -= penalty
-                
-                next_word = logits.argmax(1).item()
-                if next_word == eos_id: break
-                
-                predicted_indices.append(next_word)
-                ys = torch.cat([ys, torch.ones(1, 1).type(torch.long).fill_(next_word).to(device)], dim=1)
-            return predicted_indices
+    return beams[0][0] # Restituiamo la sequenza del miglior fascio (score più alto)
 
 # --- DATA LOADING ---
 
@@ -107,7 +129,7 @@ def run_deep_audit():
     data_root = os.path.join(project_root, "Datasets", "processed")
 
     if not os.path.exists(tokenizer_path):
-        print(f"❌ Errore: Tokenizer non trovato in {tokenizer_path}")
+        print(f"❌ Errore: Tokenizer non trovato")
         return
 
     tokenizer = Tokenizer.from_file(tokenizer_path)
@@ -123,7 +145,7 @@ def run_deep_audit():
     }
 
     checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")]
-    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | SOURCE: PROCESSED | PENALTY: ON\n{'='*90}")
+    print(f"\n{'='*90}\n🚀 AUDIT START | DEVICE: {device} | SOURCE: PROCESSED | MODE: BEAM SEARCH (k=5)\n{'='*90}")
 
     for ckpt in sorted(checkpoints):
         if "transformer" in ckpt.lower(): model_tag = "transformer"
@@ -145,8 +167,8 @@ def run_deep_audit():
                     ids_input = tokenizer.encode(s['code']).ids
                     src_tensor = torch.LongTensor([1] + ids_input + [2]).unsqueeze(0).to(device)
                     
-                    # Chiamata con Repetition Penalty
-                    ids_pred = autoregressive_decode(model, src_tensor, tokenizer, model_tag, device=device, penalty=2.5)
+                    # Chiamata con Beam Search
+                    ids_pred = beam_search_decode(model, src_tensor, tokenizer, model_tag, beam_width=5, device=device, penalty=1.2)
                     prediction = clean_output(tokenizer.decode(ids_pred, skip_special_tokens=True))
                     
                     print(f"    S#{i+1} | CODE: {s['code'].strip().replace('\\n', ' ')[:45]}...")
