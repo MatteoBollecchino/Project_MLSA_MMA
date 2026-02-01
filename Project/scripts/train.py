@@ -23,10 +23,10 @@ def train_model(model, train_loader, valid_loader, config, device, telemetry=Non
     
     if config.model == "transformer":
         # Strategia per il TITANO: Regolarizzazione equilibrata
-        weight_decay = 0.05      # <--- VALORE RICHIESTO: Equilibrio tra stabilità e capacità
-        label_smoothing = 0.1    # Impedisce l'eccessiva confidenza sui token comuni
-        max_lr = 0.0005          # Velocità controllata
-        pct_start = 0.1          # Warmup rapido per stabilizzare i gradienti
+        weight_decay = 0.1      # <--- VALORE RICHIESTO: Equilibrio tra stabilità e capacità
+        label_smoothing = 0.2    # Impedisce l'eccessiva confidenza sui token comuni
+        max_lr = 0.0001          # Velocità controllata
+        pct_start = 0.3          # Warmup rapido per stabilizzare i gradienti
     else:
         # Strategia per IL SARTO (LSTM): Standard legacy
         weight_decay = 0.01
