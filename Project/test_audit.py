@@ -171,7 +171,7 @@ def run_deep_audit():
                     ids_pred = beam_search_decode(model, src_tensor, tokenizer, model_tag, beam_width=5, device=device, penalty=1.2)
                     prediction = clean_output(tokenizer.decode(ids_pred, skip_special_tokens=True))
                     
-                    print(f"    S#{i+1} | CODE: {s['code'].strip().replace('\\n', ' ')[:45]}...")
+                    print(f"    S#{i+1} | CODE: {s['code'].strip().replace(chr(10), ' ')[:45]}...")
                     print(f"        REAL: {s['doc'][:60].strip()}")
                     print(f"        PRED: {prediction}")
                     print(f"        {'-'*20}")
