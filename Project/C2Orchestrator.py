@@ -1,6 +1,6 @@
 """
 ================================================================================
-C2 MASTER ORCHESTRATOR - Project CASS (Code Analysis & Summarization System)
+C2 MASTER ORCHESTRATOR - (Code Analysis & Summarization System)
 ================================================================================
 ROLE: Central Management Unit (CMU) for the Neural Pipeline.
 
@@ -27,7 +27,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.0-Origin" 
+PIPELINE_VERSION = "4.4.2-Origin" 
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
 from data.download_dataset import download_codesearchnet_robust
