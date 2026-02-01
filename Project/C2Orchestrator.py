@@ -8,7 +8,7 @@ from datetime import datetime
 from tokenizers import Tokenizer
 
 # --- [GLOBAL CONFIGURATION] ---
-PIPELINE_VERSION = "4.2.0-Origin"  # Focus: Regularization Tuning & Fail-Safe Shifting
+PIPELINE_VERSION = "4.3.0-Origin"  # Focus: Regularization Tuning & Fail-Safe Shifting
 
 # Importing project modules
 from data.download_dataset import download_codesearchnet_robust
