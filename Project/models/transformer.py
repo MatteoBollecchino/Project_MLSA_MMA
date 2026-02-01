@@ -1,16 +1,15 @@
 """
-TRANSFORMER REVISION - Version 2.5 (Final CTO Release)
-------------------------------------------------------
-MODIFICHE CHIRURGICHE APPORTATE:
-1. CONDITIONAL SHIFTING: Inserito controllo self.training. Durante il training
-   il modello sfasera i target internamente per impedire il 'peeking'. In audit,
-   accetta la sequenza intera per permettere la generazione autoregressiva.
-2. DUMMY PADDING (Alignment): Durante il training, l'output viene esteso con un 
-   prefisso vuoto per mantenere la compatibilità con la riga output[:, 1:] di train.py.
-3. SCALING ATTENTION: Moltiplicazione degli embedding per sqrt(d_model) per
-   evitare la saturazione della Softmax: $$Attention(Q,K,V) = softmax(\frac{QK^T}{\sqrt{d_k}})V$$
-4. FIXED POSITIONAL ENCODING: Bussola geometrica sinusoidale fissa per la stabilità.
-5. MEMORY MASKING: Corretto l'uso di memory_key_padding_mask per ignorare il pad dell'encoder.
+TRANSFORMER REVISION - Version 2.6 (Unified Alignment Release)
+--------------------------------------------------------------
+MODIFICHE CHIRURGICHE:
+1. TEACHER FORCING DETECTION: Il modello rileva se riceve una sequenza (Train/Val)
+   o un singolo token (Inference). Se riceve una sequenza, applica lo shift
+   indipendentemente da model.train() o model.eval().
+2. DUMMY PADDING UNIVERSALE: L'output per la Loss viene sempre allineato 
+   per essere processato da output[:, 1:] nel modulo train.py.
+3. ATTENTION SCALING: Stabilità numerica garantita tramite:
+   $$Attention(Q,K,V) = softmax(\frac{QK^T}{\sqrt{d_k}})V$$
+4. MEMORY MASKING: L'encoder non influenza il decoder sui token di padding.
 """
 
 import torch
@@ -54,44 +53,45 @@ class Seq2SeqTransformer(nn.Module):
         return torch.triu(torch.ones(sz, sz, device=device), diagonal=1).bool()
 
     def forward(self, src, trg, **kwargs):
-        # 1. --- STRATEGIA DI SFASAMENTO CONDIZIONALE ---
-        if self.training:
-            # Durante il training, 'trg' è la sequenza completa.
-            # Tagliamo l'ultimo token per l'input del decoder per non 'barare'.
+        # 1. --- LOGICA DI ALLINEAMENTO STRUTTURALE ---
+        # Verifichiamo se stiamo processando una sequenza intera (Teacher Forcing)
+        # Questo accade sia in Training che nel calcolo della Val Loss in scripts/train.py
+        is_teacher_forcing = trg.size(1) > 1
+        
+        if is_teacher_forcing:
+            # Shift interno per impedire al modello di vedere il futuro
             trg_input = trg[:, :-1]
         else:
-            # Durante l'audit/inferenza, 'trg' è la sequenza parziale generata finora.
-            # Usiamo tutto l'input fornito senza tagli.
+            # Decodifica autoregressiva (Audit/Inference)
             trg_input = trg
         
-        # 2. GENERAZIONE MASCHERE PADDING E CAUSALI
+        # 2. GENERAZIONE MASCHERE
         src_key_padding_mask = (src == 0)
         tgt_key_padding_mask = (trg_input == 0)
         tgt_mask = self._generate_causal_mask(trg_input.size(1), src.device)
         
-        # 3. TRASFORMAZIONE NELLO SPAZIO LATENTE
-        # Scaling con sqrt(d_model) fondamentale per mantenere i gradienti sani
+        # 3. EMBEDDING + STABILIZZAZIONE
         src_emb = self.pos_encoder(self.embedding(src) * math.sqrt(self.d_model))
         tgt_emb = self.pos_encoder(self.embedding(trg_input) * math.sqrt(self.d_model))
         
-        # 4. ESECUZIONE DEL CORE TRANSFORMER
+        # 4. ESECUZIONE
         output = self.transformer(
             src_emb, tgt_emb, tgt_mask=tgt_mask,
             src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=tgt_key_padding_mask,
-            memory_key_padding_mask=src_key_padding_mask # Filtra il rumore dell'encoder
+            memory_key_padding_mask=src_key_padding_mask # Cruciale per ignorare il PAD dell'encoder
         )
         
-        # 5. PROIEZIONE SUL VOCABOLARIO
+        # 5. PROIEZIONE FINALE
         predictions = self.fc_out(output)
         
-        # 6. --- RIFINITURA PER L'ORCHESTRATORE ---
-        if self.training:
-            # Per non modificare train.py, dobbiamo restituire una sequenza di lunghezza pari a 'trg'.
-            # Aggiungiamo un prefisso di zeri che verrà ignorato dalla CrossEntropyLoss.
+        # 6. --- RICONCILIAZIONE CON L'ORCHESTRATORE (scripts/train.py) ---
+        if is_teacher_forcing:
+            # Ripristiniamo la lunghezza originale tramite dummy_prefix
+            # Questo permette a train.py di usare output[:, 1:] senza errori di sfasamento
             batch_size = src.size(0)
             dummy_prefix = torch.zeros(batch_size, 1, self.vocab_size).to(src.device)
             return torch.cat([dummy_prefix, predictions], dim=1)
-        else:
-            # In Audit restituiamo le predizioni pure per la decodifica autoregressiva.
-            return predictions
+        
+        # Restituiamo le predizioni pure per la Beam Search / Greedy Search
+        return predictions
