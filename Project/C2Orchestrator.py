@@ -3,8 +3,12 @@ import argparse
 import logging
 import torch
 import time
+import sys
 from datetime import datetime
 from tokenizers import Tokenizer
+
+# --- [GLOBAL CONFIGURATION] ---
+PIPELINE_VERSION = "4.2.0-Origin"  # Focus: Regularization Tuning & Fail-Safe Shifting
 
 # Importing project modules
 from data.download_dataset import download_codesearchnet_robust
@@ -23,14 +27,10 @@ logger = logging.getLogger(__name__)
 
 # --- [MASTER PIPELINE CLASS] ---
 class CodeSummarizationPipeline:
-    """ Pipeline orchestrator for code summarization tasks. """
+    """ Pipeline orchestrator for code summarization tasks - C2 Project. """
 
-    # Initialization of configuration of the pipeline
     def __init__(self, config):
-
         self.config = config
-
-        # self-root = path of the orchestrator
         self.root = os.path.dirname(os.path.abspath(__file__))
 
         # Paths configuration
@@ -40,25 +40,34 @@ class CodeSummarizationPipeline:
         self.checkpoint_dir = os.path.join(self.root, "models", "checkpoints")
         self.processed_dir = os.path.join(self.dataset_root, "processed")
 
-        for i in range(torch.cuda.device_count()):
-            print(f"Index {i}: {torch.cuda.get_device_name(i)}")
+        print(f"\n" + "="*60)
+        print(f"🤖 C2 ORCHESTRATOR | Version: {PIPELINE_VERSION}")
+        print(f"📅 Session Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("="*60)
 
-        # Imposta la GPU esterna (supponendo sia l'indice 1) come UNICA visibile
-        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+        # Audit Hardware
+        print(f"[*] Inspecting Hardware capabilities...")
+        device_count = torch.cuda.device_count()
+        if device_count > 0:
+            for i in range(device_count):
+                print(f"    - GPU Index {i}: {torch.cuda.get_device_name(i)}")
+            # Forza l'utilizzo della GPU ad alte prestazioni (Indice 1)
+            os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+            print(f"[!] Strict Device Isolation: CUDA_VISIBLE_DEVICES forced to '1'")
+        else:
+            print("    - No GPU detected. Falling back to CPU (Throughput limited).")
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[*] Target Compute Device: {self.device}")
         
         # Evaluation Fidelity Mapping
         self.eval_map = {"instant": 100, "fast": 200, "deep": 1000}
         self.eval_samples = self.eval_map[self.config.evaluation]
 
-    # Execution of the pipeline
     def run(self):
         """ Main execution method of the pipeline. """
-
-        logger.info(f"--- MASTER PIPELINE START | Mode: {self.config.mode.upper()} ---")
+        logger.info(f"--- MASTER PIPELINE START | v{PIPELINE_VERSION} | Mode: {self.config.mode.upper()} ---")
         
-        # Mode-based execution
         if self.config.mode == "train":
             if not self.config.model:
                 logger.error("❌ Error: In 'train' mode the --model parameter is MANDATORY.")
@@ -67,130 +76,101 @@ class CodeSummarizationPipeline:
         else:
             self._execute_audit()
 
-    # Execution of the training pipeline
     def _execute_training(self):
         """ Manages the entire training and telemetry pipeline. """
-
-        # Initialization of telemetry specific to training
         telemetry = ExecutionLogger(self.root, self.config.model, self.config.subset)
+        
+        # Iniezione versione nella telemetria
+        telemetry._write_to_file(f"PIPELINE_VERSION: {PIPELINE_VERSION}\n")
         telemetry.log_sys_info()
 
-        # PHASE 1: DATA INFRASTRUCTURE
+        # --- PHASE 1: DATA INFRASTRUCTURE ---
+        logger.info("📡 Phase 1: Validating Data Infrastructure...")
         t0 = time.time()
 
-        # Dataset download if not present
         if not os.path.exists(self.jsonl_base) or self.config.force_download:
             download_codesearchnet_robust(self.dataset_root)
 
-        # Save human-readable samples for inspection
         output_dir = os.path.join(self.dataset_root, "Human_readable_sample")
         save_human_readable_samples(self.jsonl_base, output_dir, "data_preview_raw.txt")
         telemetry.log_phase("data_infrastructure", time.time() - t0)
 
-        # --- CONTROLLO DATASET PULITO ---
+        # --- PHASE 2: DATA CLEANING & MD5 DEDUPLICATION ---
+        logger.info("🧹 Phase 2: Sanitizing Source Code & Target Summaries...")
         t1 = time.time()
-        
-        # Lista dei file attesi dopo la pulizia
         expected_files = ["train.jsonl.gz", "valid.jsonl.gz", "test.jsonl.gz"]
-        
-        # Verifica se tutti i file esistono
-        # Nota: usiamo force_download anche qui per rigenerare se l'utente ha chiesto un reset completo
         is_processed = all(os.path.exists(os.path.join(self.processed_dir, f)) for f in expected_files)
         
         if is_processed and not self.config.force_download:
-            logger.info(f"✅ Processed dataset found in '{self.processed_dir}'. Skipping cleaning phase.")
+            logger.info("✅ Verified Clean Data found. Skipping cleaning phase.")
         else:
-            logger.info("🧹 Processed data missing or forced refresh. Starting Dataset Cleaning...")
-            
-            # Dataset cleaning execution
             cleaner = DatasetCleaner()
             cleaner.run(self.jsonl_base, self.processed_dir)
-
-            # Save human-readable samples for inspection (Processed Data)
-            # Lo facciamo solo se abbiamo appena pulito, o se il file non esiste
             save_human_readable_samples(self.processed_dir, output_dir, "data_preview_processed.txt")
             
         telemetry.log_phase("data_cleaning", time.time() - t1)
 
-        # PHASE 2: TOKENIZER
+        # --- PHASE 3: TOKENIZATION ---
+        logger.info(f"🔢 Phase 3: Building Symbolic Mapping (BPE Vocab: 20000)...")
         t0 = time.time()
-
-        # Tokenizer preparation (reuse if already exists and no force flag)
         reused = os.path.exists(self.tokenizer_path) and not self.config.force_preprocess
 
         if not reused:
-            # Tokenizer's Vocabulary creation
             build_tokenizer(self.processed_dir, self.tokenizer_path, vocab_size=20000)
-        tokenizer_duration = time.time() - t0
         
-        # Load tokenizer and get vocabulary size
+        tokenizer_duration = time.time() - t0
         tmp_tok = Tokenizer.from_file(self.tokenizer_path)
         vocab_size = tmp_tok.get_vocab_size()
-
-        # Logging tokenizer info
         telemetry.log_tokenizer_info(vocab_size, reused=reused, duration=tokenizer_duration)
 
-        # PHASE 3: TRAINING
-
-        # Model filename configuration
+        # --- PHASE 4: ARCHITECTURAL SYNTHESIS & TRAINING ---
+        logger.info(f"🏗️ Phase 4: Initializing {self.config.model.upper()}...")
         model_tag = self.config.model
         filename = f"{datetime.now().strftime('%Y%m%d_%H%M')}_{model_tag}_sub{self.config.subset if self.config.subset else 'all'}.pt"
         model_save_path = os.path.join(self.checkpoint_dir, filename)
 
-        # DataLoader preparation
         train_loader = get_dataloader(self.processed_dir, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
-
-        # Validation DataLoader (smaller subset for speed)
         valid_loader = get_dataloader(self.processed_dir, "valid", self.tokenizer_path, self.config.batch_size, subset=self.config.subset // 5 if self.config.subset else None)
 
         try:
-            # Model training
             t_train_start = time.time()
+            # La Factory ora inietta i parametri differenziati (Dropout 0.3 per Transformer)
             model = get_model_architecture(model_tag, self.device, vocab_size=vocab_size)
+            
+            # Il Train ora applica il Weight Decay differenziato (0.05 per Transformer)
             train_model(model, train_loader, valid_loader, self.config, self.device, telemetry=telemetry)
             
-            # Save the trained model
             os.makedirs(self.checkpoint_dir, exist_ok=True)
             torch.save(model.state_dict(), model_save_path)
+            logger.info(f"💾 Checkpoint saved: {filename}")
             telemetry.log_phase("model_training", time.time() - t_train_start)
 
-            # PHASE 4: AUTO-EVALUATION (Fast)
+            # --- PHASE 5: AUTO-EVALUATION ---
+            logger.info(f"📊 Phase 5: Executing {self.config.evaluation.upper()} Audit...")
             t_eval_start = time.time()
-
-            """
-            # Initialize evaluator and run evaluation
-            evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.jsonl_base, subset_size=self.eval_samples)
-            """
-
-            # Initialize evaluator and run evaluation
             evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.processed_dir, subset_size=self.eval_samples)
             df_results = evaluator.run_all(specific_file=filename)
             telemetry.log_phase(f"evaluation_{self.config.evaluation}", time.time() - t_eval_start)
             
-            # Log final metrics if available
             if df_results is not None:
                 telemetry.log_final_metrics(df_results, self.config.evaluation)
 
         except Exception as e:
-            logger.error(f"FAILURE during training: {e}")
-            telemetry._write_to_file(f"CRITICAL ERROR: {str(e)}\n")
+            logger.error(f"❌ CRITICAL PIPELINE FAILURE: {e}")
+            telemetry._write_to_file(f"CRITICAL ERROR | v{PIPELINE_VERSION}: {str(e)}\n")
         finally:
             telemetry.finalize()
+            print(f"\n[!] Session Finalized. Pipeline Version {PIPELINE_VERSION} signing off.\n")
 
-    # Execution of the audit pipeline
     def _execute_audit(self):
-        """ Executes the audit (evaluation) on a selection of existing checkpoints."""
-
-        logger.info(f"🧐 Starting Audit Mode: {self.config.evaluation.upper()} fidelity")
+        """ Executes the audit (evaluation) on existing checkpoints."""
+        logger.info(f"🧐 Audit Mode Active | Pipeline v{PIPELINE_VERSION}")
         
-        # Checkpoint directory validation
         if not os.path.exists(self.checkpoint_dir):
             logger.error(f"❌ Checkpoint directory not found at {self.checkpoint_dir}")
             return
 
-        # Retrieve files LIFO (Last-In, First-Out)
         all_ckpts = sorted([f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")], reverse=True)
-        
         if not all_ckpts:
             logger.error("❌ No checkpoints available for evaluation.")
             return
@@ -201,87 +181,36 @@ class CodeSummarizationPipeline:
             targets = all_ckpts
         else:
             try:
-                # Converts "1,2,4" into list indices [0, 1, 3]
                 indices = [int(i.strip()) - 1 for i in self.config.neval.split(",")]
-
-                # Select corresponding checkpoints
                 targets = [all_ckpts[i] for i in indices if 0 <= i < len(all_ckpts)]
-                
-            except (ValueError, IndexError) as e:
-                logger.error(f"❌ Error in --neval format '{self.config.neval}': {e}")
+            except Exception as e:
+                logger.error(f"❌ Invalid index format: {e}")
                 return
 
-        if not targets:
-            logger.warning("⚠️ No checkpoints matching the provided indices.")
-            return
-
-        logger.info(f"🔎 Models under review: {targets}")
-
-        """
-        # Initializing Evaluator
-        evaluator = BatchEvaluator(
-            self.device, self.tokenizer_path, self.checkpoint_dir, 
-            self.jsonl_base, subset_size=self.eval_samples
-        )
-        """
-
-        # Initializing Evaluator
-        evaluator = BatchEvaluator(
-            self.device, self.tokenizer_path, self.checkpoint_dir, 
-            self.processed_dir, subset_size=self.eval_samples
-        )
-
-        t_audit_start = time.time()
-
-        # Running evaluation on each selected checkpoint
-        for ckpt in targets:
-            logger.info(f"--- Analysis: {ckpt} ---")
-
-            # Execute evaluation
-            df_res = evaluator.run_all(specific_file=ckpt)
-
-            if df_res is not None:
-                print(f"\n{df_res.to_string(index=False)}\n")
+        evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.processed_dir, subset_size=self.eval_samples)
         
-        logger.info(f"✅ Audit completed in {time.time() - t_audit_start:.2f}s")
+        for ckpt in targets:
+            print(f"\n🔍 Analyzing: {ckpt}")
+            df_res = evaluator.run_all(specific_file=ckpt)
+            if df_res is not None:
+                print(df_res.to_string(index=False))
+        
+        logger.info(f"✅ Audit Mode Completed.")
 
 if __name__ == "__main__":
-
-    # Declaration of the parser for command line arguments
-    parser = argparse.ArgumentParser(description="C2 Orchestrator - Project MLSA V1.0")
+    parser = argparse.ArgumentParser(description=f"C2 Master Pipeline v{PIPELINE_VERSION}")
     
-    # Modality switch of the pipeline (train / eval)
-    parser.add_argument("--mode", type=str, default="train", choices=["train", "eval"], 
-                        help="Choose 'train' to train a new model or 'eval' to audit existing checkpoints")
-    
-    # --- MODEL PARAMETERS & TRAINING ---
-    # Aggiornato per riflettere la separazione delle logiche di Attention
-    parser.add_argument("--model", type=str, 
-                        choices=["transformer", "lstm_bahdanau", "lstm_dotproduct"], 
-                        help="Architecture selection: 'transformer' (High-Parallel), "
-                             "'lstm_bahdanau' (Additive/Learned), "
-                             "'lstm_dotproduct' (Multiplicative/Professor's version)")
-    
-    parser.add_argument("--subset", type=int, default=None, help="Training dataset size")
+    parser.add_argument("--mode", type=str, default="train", choices=["train", "eval"])
+    parser.add_argument("--model", type=str, choices=["transformer", "lstm_bahdanau", "lstm_dotproduct"])
+    parser.add_argument("--subset", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--neval", type=str, default="1")
+    parser.add_argument("--evaluation", type=str, default="fast", choices=["instant", "fast", "deep"])
+    parser.add_argument("--force_download", action="store_true")
+    parser.add_argument("--force_preprocess", action="store_true")
+    parser.add_argument("--force_train", action="store_true")
     
-    # --- AUDIT / EVALUATION PARAMETERS ---
-    parser.add_argument("--neval", type=str, default="1", 
-                        help="'all' for all checkpoints, or comma-separated indices (e.g., 1,2,4) "
-                             "based on reverse chronological order")
-    
-    parser.add_argument("--evaluation", type=str, default="fast", choices=["instant", "fast", "deep"], 
-                        help="Depth of evaluation (100, 200, 1000 samples)")
-
-    # --- INFRASTRUCTURE FLAGS ---
-    parser.add_argument("--force_download", action="store_true", help="Force re-download of dataset")
-    parser.add_argument("--force_preprocess", action="store_true", help="Force re-creation of BPE vocabulary")
-    parser.add_argument("--force_train", action="store_true", help="Overwrite existing checkpoint if naming matches")
-    
-    # Parsing of arguments
     args = parser.parse_args()
-
-    # Declaration and execution of the pipeline
     pipeline = CodeSummarizationPipeline(args)
     pipeline.run()

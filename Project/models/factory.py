@@ -1,4 +1,5 @@
 import logging
+import torch
 from models.transformer import Seq2SeqTransformer
 from models.seq2seq_bahdanau import Seq2SeqBahdanau
 from models.seq2seq_dotproduct import Seq2SeqDotProduct
@@ -7,75 +8,67 @@ logger = logging.getLogger(__name__)
 
 def get_model_architecture(model_type, device, vocab_size=20000):
     """
-    FACTORY ACTUATOR: Configures and instantiates the requested neural architecture.
-    
-    COMMON PARAMETERS:
-    - emb_dim (256): Dimension of the token vector projection.
-    - hid_dim (512): Capacity of the latent space (Hidden State / d_model).
-    - dropout (0.1): Dropout probability for regularization.
-    
-    LSTM PARAMETERS (Sequential):
-    - n_layers (2): Number of stacked LSTM layers.
-    
-    TRANSFORMER PARAMETERS (Parallel):
-    - nhead (8): Number of Multi-Head Attention heads.
-    - transformer_layers (6): Number of Encoder/Decoder blocks.
+    FACTORY ACTUATOR v3.5 - Tailored Architectures
+    ---------------------------------------------
+    Parametri calibrati in base al fenotipo architettonico:
+    - LSTM: Mantiene conservatorismo statistico (Dropout 0.1).
+    - TRANSFORMER: Regolarizzazione aggressiva (Dropout 0.3) per rompere 
+      la memorizzazione delle stringhe fisse (rote learning).
     """
-    
-    params = {
+
+    # --- CONFIGURAZIONE SPECIFICA PER LSTM (Bahdanau & DotProduct) ---
+    lstm_params = {
         "emb_dim": 256,
         "hid_dim": 512,
         "n_layers": 2,
-        "dropout": 0.1,
-        "nhead": 8,
-        "transformer_layers": 6
+        "dropout": 0.1  # Protocollo standard
     }
 
-    # --- [ARCHITECTURE 1: LSTM with ADDITIVE ATTENTION (Bahdanau)] ---
-    # This architecture uses a neural network (tanh layer) to calculate alignment scores.
-    # It is computationally expensive but very robust for varying sequence lengths.
+    # --- CONFIGURAZIONE SPECIFICA PER TRANSFORMER (Attacco all'Overfitting) ---
+    trans_params = {
+        "emb_dim": 256,
+        "hid_dim": 512,   # Rappresenta d_model
+        "nhead": 8,
+        "layers": 6,
+        "dropout": 0.3,   # <--- FIX: Iniezione di entropia per forzare la generalizzazione
+        "dim_feedforward": 2048
+    }
+
+    # --- BRANCH LOGICO ---
+
     if model_type == "lstm_bahdanau":
-        logger.info(f"🏗️ Factory: Generating LSTM + Bahdanau (Additive Attention)")
+        logger.info(f"🏗️ Factory: Generating LSTM + Bahdanau (Conservative Dropout: {lstm_params['dropout']})")
         return Seq2SeqBahdanau(
             vocab_size=vocab_size, 
-            emb_dim=params["emb_dim"], 
-            hid_dim=params["hid_dim"], 
-            n_layers=params["n_layers"], 
-            dropout=params["dropout"], 
+            emb_dim=lstm_params["emb_dim"], 
+            hid_dim=lstm_params["hid_dim"], 
+            n_layers=lstm_params["n_layers"], 
+            dropout=lstm_params["dropout"], 
             device=device
-        ).to(device) # Crucial: Moves the initialized model to GPU/CPU VRAM immediately.
+        ).to(device)
 
-    # --- [ARCHITECTURE 2: LSTM with MULTIPLICATIVE ATTENTION (Dot-Product)] ---
-    # This architecture uses the Dot Product between vectors to calculate alignment.
-    # It is faster and more memory-efficient than Bahdanau (geometric approach),
-    # but theoretically slightly less expressive without scaling.
     elif model_type == "lstm_dotproduct":
-        logger.info(f"🏗️ Factory: Generating LSTM + DotProduct (Geometric Attention)")
+        logger.info(f"🏗️ Factory: Generating LSTM + DotProduct (Conservative Dropout: {lstm_params['dropout']})")
         return Seq2SeqDotProduct(
             vocab_size=vocab_size, 
-            emb_dim=params["emb_dim"], 
-            hid_dim=params["hid_dim"], 
-            n_layers=params["n_layers"], 
-            dropout=params["dropout"], 
+            emb_dim=lstm_params["emb_dim"], 
+            hid_dim=lstm_params["hid_dim"], 
+            n_layers=lstm_params["n_layers"], 
+            dropout=lstm_params["dropout"], 
             device=device
         ).to(device)
 
-    # --- [ARCHITECTURE 3: TRANSFORMER (Attention Is All You Need)] ---
-    # State-of-the-art architecture based entirely on Self-Attention mechanisms.
-    # Unlike LSTMs, it processes the entire sequence in parallel (non-sequential),
-    # allowing for massive parallelization on GPUs and better handling of long-range dependencies.
     elif model_type == "transformer":
-        logger.info(f"⚡ Factory: Generating Transformer (Heads: {params['nhead']}, Layers: {params['transformer_layers']})")
+        logger.info(f"⚡ Factory: Generating Transformer (Aggressive Dropout: {trans_params['dropout']})")
         return Seq2SeqTransformer(
             vocab_size=vocab_size, 
-            d_model=params["hid_dim"],  # Maps 'hid_dim' to Transformer's 'd_model'
-            nhead=params["nhead"],
-            num_layers=params["transformer_layers"], 
-            dropout=params["dropout"]
+            d_model=trans_params["hid_dim"],
+            nhead=trans_params["nhead"],
+            num_layers=trans_params["layers"], 
+            dim_feedforward=trans_params["dim_feedforward"],
+            dropout=trans_params["dropout"]
         ).to(device)
-    
-    # --- [ERROR HANDLING] ---
-    # Failsafe for incorrect configuration strings.
+
     else:
         logger.error(f"❌ Errore critico: Architettura '{model_type}' non supportata.")
         raise ValueError(f"Unknown model type: {model_type}")
