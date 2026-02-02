@@ -89,9 +89,9 @@ class CodeSummaryDataset(Dataset):
         file_path = os.path.join(data_dir, f"{split_type}.jsonl.gz")
         
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f"❌ Refinery Error: Processed data not found at {file_path}")
+            raise FileNotFoundError(f"Refinery Error: Processed data not found at {file_path}")
         
-        print(f"🔍 [MEM_CACHE] Loading refined '{split_type}' data into RAM...")
+        print(f"[MEM_CACHE] Loading refined '{split_type}' data into RAM...")
 
         # --- FAST LOADING & TOKENIZATION LOOP ---
         with gzip.open(file_path, 'rt', encoding='utf-8') as f:
@@ -124,7 +124,7 @@ class CodeSummaryDataset(Dataset):
                 except json.JSONDecodeError:
                     continue
 
-        print(f"✅ Cache Ready: {len(self.data)} samples ready for stochastic gradient descent.")
+        print(f"Cache Ready: {len(self.data)} samples ready for stochastic gradient descent.")
 
     def __len__(self):
         return len(self.data)
