@@ -28,6 +28,7 @@ from tokenizers import Tokenizer
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
 PIPELINE_VERSION = "4.4.2-Origin" 
+AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
 from data.download_dataset import download_codesearchnet_robust
@@ -70,8 +71,8 @@ class CodeSummarizationPipeline:
         self.processed_dir = os.path.join(self.dataset_root, "processed")
 
         print(f"\n" + "="*60)
-        print(f"🤖 C2 ORCHESTRATOR | Version: {PIPELINE_VERSION}")
-        print(f"📅 Session Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"C2 ORCHESTRATOR | Version: {PIPELINE_VERSION} | Authors: {AUTHORS}")
+        print(f"Session Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*60)
 
         # --- HARDWARE AUDIT & ISOLATION ---
@@ -106,7 +107,7 @@ class CodeSummarizationPipeline:
         if self.config.mode == "train":
             # Safety Interlock: Training requires a defined target architecture.
             if not self.config.model:
-                logger.error("❌ Error: In 'train' mode the --model parameter is MANDATORY.")
+                logger.error("Error: In 'train' mode the --model parameter is MANDATORY.")
                 return
             self._execute_training()
         else:
@@ -146,7 +147,7 @@ class CodeSummarizationPipeline:
         is_processed = all(os.path.exists(os.path.join(self.processed_dir, f)) for f in expected_files)
         
         if is_processed and not self.config.force_download:
-            logger.info("✅ Verified Clean Data found. Skipping cleaning phase.")
+            logger.info("Verified Clean Data found. Skipping cleaning phase.")
         else:
             cleaner = DatasetCleaner()
             cleaner.run(self.jsonl_base, self.processed_dir)
@@ -157,7 +158,7 @@ class CodeSummarizationPipeline:
         # --- PHASE 3: TOKENIZATION ---
         # Goal: Symbolic Representation. Converts text into high-dimensional integer IDs.
         # Uses Byte-Pair Encoding (BPE) to handle sub-word units and Python syntax.
-        logger.info(f"🔢 Phase 3: Building Symbolic Mapping (BPE Vocab: 20000)...")
+        logger.info(f"Phase 3: Building Symbolic Mapping (BPE Vocab: 20000)...")
         t0 = time.time()
         reused = os.path.exists(self.tokenizer_path) and not self.config.force_preprocess
 
@@ -172,7 +173,7 @@ class CodeSummarizationPipeline:
         # --- PHASE 4: ARCHITECTURAL SYNTHESIS & TRAINING ---
         # Goal: Optimization. Translates data into neural weights.
         # Differentiated regularizers (Dropout 0.3 for Transformers) are injected here.
-        logger.info(f"🏗️ Phase 4: Initializing {self.config.model.upper()}...")
+        logger.info(f"Phase 4: Initializing {self.config.model.upper()}...")
         model_tag = self.config.model
         filename = f"{datetime.now().strftime('%Y%m%d_%H%M')}_{model_tag}_sub{self.config.subset if self.config.subset else 'all'}.pt"
         model_save_path = os.path.join(self.checkpoint_dir, filename)
@@ -192,13 +193,13 @@ class CodeSummarizationPipeline:
             # Persist optimized weights to disk.
             os.makedirs(self.checkpoint_dir, exist_ok=True)
             torch.save(model.state_dict(), model_save_path)
-            logger.info(f"💾 Checkpoint saved: {filename}")
+            logger.info(f"Checkpoint saved: {filename}")
             telemetry.log_phase("model_training", time.time() - t_train_start)
 
             # --- PHASE 5: AUTO-EVALUATION ---
             # Goal: Metric Validation. Calculates BLEU and ROUGE-L on unseen data.
             # Crucial: Assesses the actual utility of the current session's model.
-            logger.info(f"📊 Phase 5: Executing {self.config.evaluation.upper()} Audit...")
+            logger.info(f"Phase 5: Executing {self.config.evaluation.upper()} Audit...")
             t_eval_start = time.time()
             evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.processed_dir, subset_size=self.eval_samples)
             df_results = evaluator.run_all(specific_file=filename)
@@ -209,7 +210,7 @@ class CodeSummarizationPipeline:
 
         except Exception as e:
             # Exception Handler: Catches and logs runtime errors to prevent telemetry loss.
-            logger.error(f"❌ CRITICAL PIPELINE FAILURE: {e}")
+            logger.error(f"CRITICAL PIPELINE FAILURE: {e}")
             telemetry._write_to_file(f"CRITICAL ERROR | v{PIPELINE_VERSION}: {str(e)}\n")
         finally:
             # Atomic Log Finalization: Renames temp logs with metrics and metadata tags.
@@ -221,16 +222,16 @@ class CodeSummarizationPipeline:
         Audit Module: Executes comparative performance analysis on existing weights.
         Designed for LIFO (Last-In, First-Out) checkpoint review.
         """
-        logger.info(f"🧐 Audit Mode Active | Pipeline v{PIPELINE_VERSION}")
+        logger.info(f"Audit Mode Active | Pipeline v{PIPELINE_VERSION}")
         
         if not os.path.exists(self.checkpoint_dir):
-            logger.error(f"❌ Checkpoint directory not found at {self.checkpoint_dir}")
+            logger.error(f"Checkpoint directory not found at {self.checkpoint_dir}")
             return
 
         # Retrieve and sort available .pt weights chronologically.
         all_ckpts = sorted([f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")], reverse=True)
         if not all_ckpts:
-            logger.error("❌ No checkpoints available for evaluation.")
+            logger.error("No checkpoints available for evaluation.")
             return
 
         # Target Selection Logic: Allows batch auditing (e.g., '1,2,5' or 'all').
@@ -242,7 +243,7 @@ class CodeSummarizationPipeline:
                 indices = [int(i.strip()) - 1 for i in self.config.neval.split(",")]
                 targets = [all_ckpts[i] for i in indices if 0 <= i < len(all_ckpts)]
             except Exception as e:
-                logger.error(f"❌ Invalid index format: {e}")
+                logger.error(f"Invalid index format: {e}")
                 return
 
         # Run Audit: Re-initializes architecture and runs inference on test datasets.
@@ -254,7 +255,7 @@ class CodeSummarizationPipeline:
             if df_res is not None:
                 print(df_res.to_string(index=False))
         
-        logger.info(f"✅ Audit Mode Completed.")
+        logger.info(f"Audit Mode Completed.")
 
 # --- ENTRY POINT ---
 if __name__ == "__main__":
