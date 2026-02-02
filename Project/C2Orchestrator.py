@@ -127,7 +127,7 @@ class CodeSummarizationPipeline:
 
         # --- PHASE 1: DATA INFRASTRUCTURE ---
         # Goal: Ensure raw data availability. Implements reliable retrieval from mirrors.
-        logger.info("📡 Phase 1: Validating Data Infrastructure...")
+        logger.info("Phase 1: Validating Data Infrastructure...")
         t0 = time.time()
 
         if not os.path.exists(self.jsonl_base) or self.config.force_download:
@@ -141,7 +141,7 @@ class CodeSummarizationPipeline:
         # --- PHASE 2: DATA REFINERY & MD5 DEDUPLICATION ---
         # Goal: Integrity. MD5 hashing prevents 'Data Contamination' (training on test data).
         # Sanitization removes comments/docstrings to prevent 'Model Cheating'.
-        logger.info("🧹 Phase 2: Sanitizing Source Code & Target Summaries...")
+        logger.info("Phase 2: Sanitizing Source Code & Target Summaries...")
         t1 = time.time()
         expected_files = ["train.jsonl.gz", "valid.jsonl.gz", "test.jsonl.gz"]
         is_processed = all(os.path.exists(os.path.join(self.processed_dir, f)) for f in expected_files)

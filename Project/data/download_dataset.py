@@ -38,7 +38,7 @@ def download_codesearchnet_robust(output_dir="Project/Datasets"):
 
     print(f"--- Attempting acquisition via Hugging Face CDN ---")
     print(f"URL: {url}")
-    print("Download in progress (about 900MB). Grab a coffee...")
+    print("Download in progress (about 900MB). Grab a coffee... but with attention!")
 
     try:
         # BOT BYPASS PROTOCOL: Vanilla requests often trigger 403 Forbidden errors 
