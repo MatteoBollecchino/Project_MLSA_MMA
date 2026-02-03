@@ -1,0 +1,59 @@
+PIPELINE_VERSION: 4.4.0-Origin
+--- INFRASTRUCTURE ---
+{
+    "os": "Linux",
+    "python": "3.12.12",
+    "device": "Tesla T4",
+    "vram_total": "15.83 GB"
+}
+[TIMER] Phase 'data_infrastructure' completed in 1.83s
+[TIMER] Phase 'data_cleaning' completed in 0.29s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "REUSED",
+    "duration": "0.00s"
+}
+Epoch 01 | Loss: 8.7745 | Val: 8.1302 | LR: 0.000010 | Time: 365.01s
+Epoch 02 | Loss: 7.7083 | Val: 7.7102 | LR: 0.000028 | Time: 368.13s
+Epoch 03 | Loss: 7.3676 | Val: 7.5187 | LR: 0.000052 | Time: 368.29s
+Epoch 04 | Loss: 7.0776 | Val: 7.3328 | LR: 0.000076 | Time: 368.19s
+Epoch 05 | Loss: 6.8691 | Val: 7.1836 | LR: 0.000094 | Time: 367.91s
+Epoch 06 | Loss: 6.7062 | Val: 7.0522 | LR: 0.000100 | Time: 367.96s
+Epoch 07 | Loss: 6.5746 | Val: 6.9651 | LR: 0.000099 | Time: 367.87s
+Epoch 08 | Loss: 6.4671 | Val: 6.8982 | LR: 0.000095 | Time: 367.82s
+Epoch 09 | Loss: 6.3782 | Val: 6.8406 | LR: 0.000089 | Time: 367.78s
+Epoch 10 | Loss: 6.3026 | Val: 6.7945 | LR: 0.000081 | Time: 367.44s
+Epoch 11 | Loss: 6.2348 | Val: 6.7585 | LR: 0.000072 | Time: 367.21s
+Epoch 12 | Loss: 6.1768 | Val: 6.7283 | LR: 0.000061 | Time: 367.11s
+Epoch 13 | Loss: 6.1246 | Val: 6.7019 | LR: 0.000050 | Time: 367.02s
+Epoch 14 | Loss: 6.0809 | Val: 6.6845 | LR: 0.000039 | Time: 366.96s
+Epoch 15 | Loss: 6.0451 | Val: 6.6713 | LR: 0.000028 | Time: 366.73s
+Epoch 16 | Loss: 6.0163 | Val: 6.6629 | LR: 0.000019 | Time: 366.98s
+Epoch 17 | Loss: 5.9957 | Val: 6.6544 | LR: 0.000011 | Time: 366.89s
+Epoch 18 | Loss: 5.9810 | Val: 6.6485 | LR: 0.000005 | Time: 366.61s
+Epoch 19 | Loss: 5.9737 | Val: 6.6513 | LR: 0.000001 | Time: 366.67s
+Epoch 20 | Loss: 5.9697 | Val: 6.6485 | LR: 0.000000 | Time: 366.68s
+[TIMER] Phase 'model_training' completed in 7796.06s
+[TIMER] Phase 'evaluation_fast' completed in 113.29s
+
+--- FINAL EVALUATION (FAST) ---
+{
+    "file": "20260202_1126_transformer_sub70000.pt",
+    "model": "transformer",
+    "bleu": 0.0010428210698193259,
+    "rougeL": 0.13538792563616256,
+    "eval_mode": "fast"
+}
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "1.83s",
+    "data_cleaning": "0.29s",
+    "model_training": "7796.06s",
+    "evaluation_fast": "113.29s",
+    "total_execution": "2:12:50.362484"
+}
+
+--- FINISHED ---
+Total Duration: 2:12:50.362484

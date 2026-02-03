@@ -1,0 +1,47 @@
+PIPELINE_VERSION: 4.4.2-Origin
+--- INFRASTRUCTURE ---
+{
+    "os": "Windows",
+    "python": "3.13.3",
+    "device": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "vram_total": "6.44 GB"
+}
+[TIMER] Phase 'data_infrastructure' completed in 0.02s
+[TIMER] Phase 'data_cleaning' completed in 0.00s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "REUSED",
+    "duration": "0.00s"
+}
+Epoch 01 | Loss: 7.3622 | Val: 7.3662 | LR: 0.000198 | Time: 1107.67s
+Epoch 02 | Loss: 6.8233 | Val: 7.3725 | LR: 0.000468 | Time: 937.10s
+Epoch 03 | Loss: 6.6670 | Val: 7.3189 | LR: 0.000486 | Time: 936.72s
+Epoch 04 | Loss: 6.6230 | Val: 7.2689 | LR: 0.000406 | Time: 929.42s
+Epoch 05 | Loss: 6.5171 | Val: 7.2206 | LR: 0.000278 | Time: 938.63s
+Epoch 06 | Loss: 6.4046 | Val: 7.1919 | LR: 0.000141 | Time: 938.22s
+Epoch 07 | Loss: 6.3250 | Val: 7.1748 | LR: 0.000038 | Time: 933.00s
+Epoch 08 | Loss: 6.2851 | Val: 7.1737 | LR: 0.000000 | Time: 935.87s
+[TIMER] Phase 'model_training' completed in 8198.00s
+[TIMER] Phase 'evaluation_fast' completed in 20.59s
+
+--- FINAL EVALUATION (FAST) ---
+{
+    "file": "20260202_1716_lstm_dotproduct_sub70000.pt",
+    "model": "lstm_dotproduct",
+    "bleu": 0.0007839933746042276,
+    "rougeL": 0.15164500054462052,
+    "eval_mode": "fast"
+}
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "0.02s",
+    "data_cleaning": "0.00s",
+    "model_training": "8198.00s",
+    "evaluation_fast": "20.59s",
+    "total_execution": "2:17:30.193876"
+}
+
+--- FINISHED ---
+Total Duration: 2:17:30.193876

@@ -1,0 +1,47 @@
+PIPELINE_VERSION: 4.4.0-Origin
+--- INFRASTRUCTURE ---
+{
+    "os": "Linux",
+    "python": "3.12.12",
+    "device": "Tesla T4",
+    "vram_total": "15.83 GB"
+}
+[TIMER] Phase 'data_infrastructure' completed in 3.63s
+[TIMER] Phase 'data_cleaning' completed in 0.38s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "REUSED",
+    "duration": "0.00s"
+}
+Epoch 01 | Loss: 7.4297 | Val: 7.4139 | LR: 0.000198 | Time: 703.95s
+Epoch 02 | Loss: 6.6733 | Val: 7.4159 | LR: 0.000468 | Time: 703.81s
+Epoch 03 | Loss: 6.5031 | Val: 7.3485 | LR: 0.000486 | Time: 704.36s
+Epoch 04 | Loss: 6.3732 | Val: 7.2621 | LR: 0.000406 | Time: 706.65s
+Epoch 05 | Loss: 6.1674 | Val: 7.2319 | LR: 0.000278 | Time: 704.93s
+Epoch 06 | Loss: 5.9796 | Val: 7.2254 | LR: 0.000141 | Time: 706.39s
+Epoch 07 | Loss: 5.8208 | Val: 7.2356 | LR: 0.000038 | Time: 706.63s
+Epoch 08 | Loss: 5.7344 | Val: 7.2485 | LR: 0.000000 | Time: 707.60s
+[TIMER] Phase 'model_training' completed in 6135.80s
+[TIMER] Phase 'evaluation_fast' completed in 10.90s
+
+--- FINAL EVALUATION (FAST) ---
+{
+    "file": "20260202_1555_lstm_bahdanau_sub50000.pt",
+    "model": "lstm_bahdanau",
+    "bleu": 0.0024303308554934084,
+    "rougeL": 0.1770619798463018,
+    "eval_mode": "fast"
+}
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "3.63s",
+    "data_cleaning": "0.38s",
+    "model_training": "6135.80s",
+    "evaluation_fast": "10.90s",
+    "total_execution": "1:43:16.471708"
+}
+
+--- FINISHED ---
+Total Duration: 1:43:16.471708

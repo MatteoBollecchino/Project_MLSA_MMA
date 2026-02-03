@@ -1,0 +1,47 @@
+PIPELINE_VERSION: 4.4.2-Origin
+--- INFRASTRUCTURE ---
+{
+    "os": "Linux",
+    "python": "3.12.12",
+    "device": "Tesla T4",
+    "vram_total": "15.83 GB"
+}
+[TIMER] Phase 'data_infrastructure' completed in 4.85s
+[TIMER] Phase 'data_cleaning' completed in 0.31s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "REUSED",
+    "duration": "0.00s"
+}
+Epoch 01 | Loss: 8.0552 | Val: 7.5067 | LR: 0.000198 | Time: 226.57s
+Epoch 02 | Loss: 7.0726 | Val: 7.4774 | LR: 0.000468 | Time: 226.84s
+Epoch 03 | Loss: 6.9816 | Val: 7.4781 | LR: 0.000486 | Time: 227.44s
+Epoch 04 | Loss: 6.9361 | Val: 7.4519 | LR: 0.000406 | Time: 231.98s
+Epoch 05 | Loss: 6.8881 | Val: 7.4630 | LR: 0.000278 | Time: 229.28s
+Epoch 06 | Loss: 6.8469 | Val: 7.4571 | LR: 0.000141 | Time: 230.64s
+Epoch 07 | Loss: 6.8024 | Val: 7.4527 | LR: 0.000038 | Time: 230.81s
+Epoch 08 | Loss: 6.7734 | Val: 7.4525 | LR: 0.000000 | Time: 227.56s
+[TIMER] Phase 'model_training' completed in 2004.15s
+[TIMER] Phase 'evaluation_fast' completed in 6.95s
+
+--- FINAL EVALUATION (FAST) ---
+{
+    "file": "20260202_1517_lstm_dotproduct_sub20000.pt",
+    "model": "lstm_dotproduct",
+    "bleu": 0.0004627298752818352,
+    "rougeL": 0.14066601209155524,
+    "eval_mode": "fast"
+}
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "4.85s",
+    "data_cleaning": "0.31s",
+    "model_training": "2004.15s",
+    "evaluation_fast": "6.95s",
+    "total_execution": "0:33:54.459446"
+}
+
+--- FINISHED ---
+Total Duration: 0:33:54.459446

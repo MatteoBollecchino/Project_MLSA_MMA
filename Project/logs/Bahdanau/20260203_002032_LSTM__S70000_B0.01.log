@@ -1,0 +1,47 @@
+PIPELINE_VERSION: 4.4.2-Origin
+--- INFRASTRUCTURE ---
+{
+    "os": "Windows",
+    "python": "3.13.3",
+    "device": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "vram_total": "6.44 GB"
+}
+[TIMER] Phase 'data_infrastructure' completed in 0.01s
+[TIMER] Phase 'data_cleaning' completed in 0.00s
+--- TOKENIZER ---
+{
+    "vocab_size": 20000,
+    "status": "REUSED",
+    "duration": "0.00s"
+}
+Epoch 01 | Loss: 7.1823 | Val: 7.3960 | LR: 0.000198 | Time: 1246.06s
+Epoch 02 | Loss: 6.6555 | Val: 7.3693 | LR: 0.000468 | Time: 1066.28s
+Epoch 03 | Loss: 6.4118 | Val: 7.1836 | LR: 0.000486 | Time: 1069.97s
+Epoch 04 | Loss: 6.2075 | Val: 7.0860 | LR: 0.000406 | Time: 1068.47s
+Epoch 05 | Loss: 5.9467 | Val: 7.0696 | LR: 0.000278 | Time: 1066.08s
+Epoch 06 | Loss: 5.7053 | Val: 7.0949 | LR: 0.000141 | Time: 1065.12s
+Epoch 07 | Loss: 5.5194 | Val: 7.1228 | LR: 0.000038 | Time: 1065.78s
+Epoch 08 | Loss: 5.4187 | Val: 7.1417 | LR: 0.000000 | Time: 1069.79s
+[TIMER] Phase 'model_training' completed in 9305.77s
+[TIMER] Phase 'evaluation_fast' completed in 24.56s
+
+--- FINAL EVALUATION (FAST) ---
+{
+    "file": "20260203_0020_lstm_bahdanau_sub70000.pt",
+    "model": "lstm_bahdanau",
+    "bleu": 0.005136909112668828,
+    "rougeL": 0.1985296843555207,
+    "eval_mode": "fast"
+}
+
+--- ALL PHASE DURATIONS ---
+{
+    "data_infrastructure": "0.01s",
+    "data_cleaning": "0.00s",
+    "model_training": "9305.77s",
+    "evaluation_fast": "24.56s",
+    "total_execution": "2:36:01.748941"
+}
+
+--- FINISHED ---
+Total Duration: 2:36:01.748941
