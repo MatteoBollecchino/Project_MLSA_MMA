@@ -1,188 +1,207 @@
 import re
-import pandas as pd
 import matplotlib.pyplot as plt
 import os
-import glob
+import numpy as np
 
-class ParametricLogParser:
+class LogComparator:
     def __init__(self):
-        # Regex Contenuto
+        # Regex standard
         self.epoch_pattern = re.compile(r"Epoch\s+(\d+)\s+\|\s+Loss:\s+([\d.]+)\s+\|\s+Val:\s+([\d.]+)", re.IGNORECASE)
         self.bleu_pattern = re.compile(r'["\']?bleu["\']?\s*[:=]\s*([\d.]+)', re.IGNORECASE)
         self.rouge_pattern = re.compile(r'["\']?rougeL["\']?\s*[:=]\s*([\d.]+)', re.IGNORECASE)
-        
-        # Regex Nome File (per Subset)
-        self.subset_pattern = re.compile(r"_S(\d+)", re.IGNORECASE)
+
+        # Cerca: "file": "QUALCOSA"
+        # Spiegazione:
+        #   "file"\s*:\s* -> cerca la chiave "file" seguita da due punti e spazi
+        #   "([^"]+)"      -> cattura tutto ciò che sta tra le virgolette successive
+        self.internal_filename_pattern = re.compile(r'"file"\s*:\s*"([^"]+)"', re.IGNORECASE)
+
+    def _get_short_name(self, filepath):
+        """Crea un'etichetta leggibile per la legenda, rimuovendo timestamp e percorsi."""
+        filename = os.path.basename(filepath)
+        # Rimuove estensione
+        name = os.path.splitext(filename)[0]
+        # Rimuove data/ora (es. 20260201_215511_) per accorciare la label
+        name = re.sub(r'^\d{8}_\d{6}_', '', name)
+        return name
 
     def parse_file(self, filepath):
-        filename = os.path.basename(filepath)
-        
         data = {
-            "filename": filename,
-            # Passiamo l'intero path per poter leggere anche il nome della cartella se serve
-            "architecture": self._derive_architecture_name(filepath),
-            "subset_size": self._extract_subset_size(filename),
-            "total_epochs": 0,
-            "metrics": {
-                "bleu": None,
-                "rougeL": None,
-                "best_val_loss": float('inf'),
-                "final_train_loss": None
-            }
+            "name": self._get_short_name(filepath),
+            "epochs": [],
+            "val_loss": [],
+            "bleu": 0.0,
+            "rougeL": 0.0
         }
 
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # 1. Parsing Epoche
-            max_epoch = 0
-            final_train_loss = 0
-            
-            for match in self.epoch_pattern.finditer(content):
-                epoch = int(match.group(1))
-                train_loss = float(match.group(2))
-                val_loss = float(match.group(3))
+            # --- PARTE NUOVA: Estrazione nome interno ---
+            name_match = self.internal_filename_pattern.search(content)
+            if name_match:
+                # Se trovato, estraiamo il nome (es: "20260201...sub50000.pt")
+                internal_name = name_match.group(1)
                 
-                if epoch > max_epoch:
-                    max_epoch = epoch
-                    final_train_loss = train_loss
+                # Opzionale: Pulizia estensioni (.pt, .pth) per rendere il grafico più bello
+                internal_name = internal_name.replace(".pt", "").replace(".pth", "")
                 
-                if val_loss < data["metrics"]["best_val_loss"]:
-                    data["metrics"]["best_val_loss"] = val_loss
-            
-            data["total_epochs"] = max_epoch
-            data["metrics"]["final_train_loss"] = final_train_loss
+                # Sovrascriviamo il nome nel dizionario
+                data["name"] = internal_name
+            # ---------------------------------------------
 
-            # 2. Parsing Metriche Finali
+            # Parsing delle epoche (come prima)
+            for match in self.epoch_pattern.finditer(content):
+                data["epochs"].append(int(match.group(1)))
+                data["val_loss"].append(float(match.group(3)))
+
+            # Parsing Metriche (come prima)
             bleu_match = self.bleu_pattern.search(content)
-            if bleu_match: data["metrics"]["bleu"] = float(bleu_match.group(1))
+            if bleu_match: data["bleu"] = float(bleu_match.group(1))
 
             rouge_match = self.rouge_pattern.search(content)
-            if rouge_match: data["metrics"]["rougeL"] = float(rouge_match.group(1))
+            if rouge_match: data["rougeL"] = float(rouge_match.group(1))
             
         except Exception as e:
-            print(f"Errore lettura file {filename}: {e}")
-
+            print(f"Errore parsing {filepath}: {e}")
+            return None
+            
         return data
 
-    def _extract_subset_size(self, filename):
-        match = self.subset_pattern.search(filename)
-        if match: return int(match.group(1))
-        return 0
-
-    def _derive_architecture_name(self, filepath):
+    def compare_logs(self, file_list):
         """
-        Strategia Ibrida:
-        1. Prova a leggerlo dal nome file (es. ..._LSTM__...)
-        2. Se fallisce o è 'Unknown', usa il nome della CARTELLA padre.
+        Input: Lista di percorsi file (strings).
+        Output: Grafico comparativo.
         """
-        filename = os.path.basename(filepath)
-        arch_name = "Unknown"
+        parsed_data = []
+        for f in file_list:
+            if os.path.exists(f):
+                d = self.parse_file(f)
+                if d and d["epochs"]: # Accetta solo se ci sono dati validi
+                    parsed_data.append(d)
+            else:
+                print(f"[WARN] File non trovato: {f}")
+
+        if not parsed_data:
+            print("Nessun dato valido da confrontare.")
+            return
+
+        # --- SETUP GRAFICO (2 Sottografici) ---
+        fig, axes = plt.subplots(1, 2, figsize=(18, 6))
+        fig.suptitle("Model Comparison: Validation Dynamics & Final Metrics", fontsize=16, fontweight='bold')
+
+        # --- 1. GRAFICO VALIDATION LOSS (Curve) ---
+        ax_loss = axes[0]
         
-        # TENTATIVO 1: Dal nome file (come prima)
-        try:
-            parts = filename.split('_')
-            if len(parts) > 2:
-                potential_name = parts[2]
-                # Se il nome estratto ha senso (non è vuoto), lo teniamo
-                if potential_name and not potential_name.startswith("S"): 
-                    arch_name = potential_name
-        except:
-            pass
+        for entry in parsed_data:
+            # Plotta la curva
+            ax_loss.plot(entry["epochs"], entry["val_loss"], 
+                         label=entry["name"], linewidth=2, marker='o', markersize=4, alpha=0.8)
+            
+            # Segna il punto minimo (Best Model)
+            min_loss = min(entry["val_loss"])
+            min_idx = entry["val_loss"].index(min_loss)
+            best_epoch = entry["epochs"][min_idx]
+            ax_loss.scatter(best_epoch, min_loss, s=80, edgecolors='black', zorder=10)
 
-        # TENTATIVO 2: Dal nome della cartella padre se il file non è chiaro
-        if arch_name == "Unknown":
-            parent_dir = os.path.basename(os.path.dirname(filepath))
-            if parent_dir:
-                arch_name = parent_dir
+        # 1. Trova il numero massimo di epoche tra tutti i dati per definire il range
+        # (Oppure usa la lista delle epoche se stai plottando un solo grafico)
+        max_epoch = max(entry["epochs"]) if isinstance(entry["epochs"], list) else 0
         
-        return arch_name
+        # Crea una sequenza di numeri interi da 1 a Max
+        all_ticks = range(1, max_epoch + 1)
 
-def analyze_parametric(root_folder):
-    parser = ParametricLogParser()
-    data_points = []
-
-    # --- RICERCA RICORSIVA ---
-    # Cerca tutti i file .log dentro root_folder e TUTTE le sue sottocartelle
-    search_pattern = os.path.join(root_folder, "**", "*.log")
-    file_list = glob.glob(search_pattern, recursive=True)
-
-    print(f"Trovati {len(file_list)} file di log in '{root_folder}' e sottocartelle.")
-
-    for f in file_list:
-        parsed = parser.parse_file(f)
+        # 2. Imposta i ticks sull'asse
+        ax_loss.set_xticks(all_ticks)
         
-        flat_entry = {
-            "filename": parsed["filename"],
-            "architecture": parsed["architecture"],
-            "subset_size": parsed["subset_size"],
-            "epochs": parsed["total_epochs"],
-            "bleu": parsed["metrics"]["bleu"],
-            "rougeL": parsed["metrics"]["rougeL"],
-            "best_val_loss": parsed["metrics"]["best_val_loss"]
-        }
-        
-        if flat_entry["epochs"] > 0:
-            data_points.append(flat_entry)
-
-    if not data_points:
-        print("Nessun dato valido trovato.")
-        return
-
-    df = pd.DataFrame(data_points)
-    df = df.sort_values(by="subset_size")
+        # Opzionale: Se i numeri si sovrappongono, riduci la dimensione del font
+        ax_loss.tick_params(axis='x', labelsize=8)
     
-    print("\n--- Riepilogo Dati ---")
-    print(df[["architecture", "subset_size", "bleu", "best_val_loss"]].to_string(index=False))
+        ax_loss.set_title("Validation Loss Evolution")
+        ax_loss.set_xlabel("Epochs")
+        ax_loss.set_ylabel("Validation Loss")
+        ax_loss.legend(fontsize='small')
+        ax_loss.grid(True, linestyle='--', alpha=0.5)
 
-    plot_parametric_results(df)
-
-def plot_parametric_results(df):
-    architectures = df["architecture"].unique()
-    print(f"\nGenerazione grafici per: {list(architectures)}")
-
-    for arch in architectures:
-        subset_df = df[df["architecture"] == arch]
-        if subset_df.empty: continue
-
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-        fig.suptitle(f"Modello: {arch}", fontsize=16, fontweight='bold')
-
-        x_vals = subset_df["subset_size"]
+        # --- 2. GRAFICO BARRE METRICHE (Bar Chart) ---
+        ax_metrics = axes[1]
         
-        # 1. BLEU
-        if subset_df["bleu"].notna().any():
-            axes[0].plot(x_vals, subset_df["bleu"], marker='o', color='royalblue', linewidth=2)
-            axes[0].set_title("BLEU Score")
-            # Etichette sui punti
-            for x, y in zip(x_vals, subset_df["bleu"]):
-                if pd.notna(y): axes[0].annotate(f"{y:.2f}", (x, y), xytext=(0,10), textcoords="offset points", ha='center')
+        names = [d["name"] for d in parsed_data]
+        bleu_scores = [d["bleu"] for d in parsed_data]
+        rouge_scores = [d["rougeL"] for d in parsed_data]
 
-        # 2. ROUGE
-        if subset_df["rougeL"].notna().any():
-            axes[1].plot(x_vals, subset_df["rougeL"], marker='s', color='seagreen', linewidth=2)
-            axes[1].set_title("ROUGE-L Score")
+        x = np.arange(len(names))  # Posizioni etichette
+        width = 0.35  # Larghezza barre
 
-        # 3. LOSS
-        if subset_df["best_val_loss"].notna().any():
-            axes[2].plot(x_vals, subset_df["best_val_loss"], marker='x', color='firebrick', linestyle='--', linewidth=2)
-            axes[2].set_title("Best Val Loss")
+        # Disegna le barre
+        rects1 = ax_metrics.bar(x - width/2, bleu_scores, width, label='BLEU', color='royalblue', alpha=0.8)
+        rects2 = ax_metrics.bar(x + width/2, rouge_scores, width, label='ROUGE-L', color='seagreen', alpha=0.8)
 
-        for ax in axes:
-            ax.set_xlabel("Dataset Size")
-            ax.grid(True, linestyle='--', alpha=0.6)
-            if len(x_vals) > 0: ax.set_xticks(x_vals)
+        # Configurazione assi
+        ax_metrics.set_title("Final Evaluation Metrics")
+        ax_metrics.set_xticks(x)
+        ax_metrics.set_xticklabels(names, rotation=15, ha="right")
+        ax_metrics.set_ylabel("Score")
+        ax_metrics.legend()
+        ax_metrics.grid(axis='y', linestyle='--', alpha=0.5)
+
+        # Aggiunge i valori sopra le barre
+        def autolabel(rects):
+            for rect in rects:
+                height = rect.get_height()
+                if height > 0:
+                    ax_metrics.annotate(f'{height:.5f}',
+                                xy=(rect.get_x() + rect.get_width() / 2, height),
+                                xytext=(0, 3),  # 3 points vertical offset
+                                textcoords="offset points",
+                                ha='center', va='bottom', fontsize=9)
+
+        autolabel(rects1)
+        autolabel(rects2)
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()
 
+# --- ESEMPIO DI UTILIZZO ---
 if __name__ == "__main__":
-    # --- CONFIGURAZIONE ---
-    # Inserisci qui il percorso della cartella "madre" che contiene le sottocartelle dei modelli
-    ROOT_LOGS = "Project/logs" 
+    
+    # 1. Definisci i file che vuoi confrontare manualmente
+    # ESEMPIO 1: CONFRONTO TRA DIVERSI MODELLI MA STESSO SUBSET SIZE
+    files_to_compare = [
+        "Project/logs/Bahdanau/20260201_215008_LSTM__S20000_B0.00.log",
+        "Project/logs/DotProduct/20260201_215511_LSTM__S20000_B0.00.log",
+        "Project/logs/Transformer/20260202_175409_TRANS_S20000_B0.00.log"
+    ]
+    
+    # 2. Crea il comparatore ed esegui
+    comparator = LogComparator()
+    
+    # Nota: Assicurati che i file esistano, altrimenti lo script li salta con un warning
+    comparator.compare_logs(files_to_compare)
 
-    if os.path.exists(ROOT_LOGS):
-        analyze_parametric(ROOT_LOGS)
-    else:
-        print(f"Attenzione: La cartella '{ROOT_LOGS}' non esiste.")
+    # ESEMPIO 2: CONFRONTO TRA STESSI MODELLI MA DIVERSI SUBSET SIZE
+    files_to_compare = [
+        "Project/logs/Bahdanau/20260202_155459_LSTM__S50000_B0.00.log",
+        "Project/logs/Bahdanau/20260203_002032_LSTM__S70000_B0.01.log",
+    ]
+
+    comparator.compare_logs(files_to_compare)
+
+    # ESEMPIO 3: CONFRONTO TRA STESSI MODELLI MA DIVERSI SUBSET SIZE
+    files_to_compare = [
+        "Project/logs/DotProduct/20260202_151709_LSTM__S20000_B0.00.log",
+        "Project/logs/DotProduct/20260202_152825_LSTM__S50000_B0.00.log",
+        "Project/logs/DotProduct/20260202_171614_LSTM__S70000_B0.00.log"
+    ]
+
+    comparator.compare_logs(files_to_compare)
+
+    # ESEMPIO 4: CONFRONTO TRA STESSI MODELLI MA DIVERSI SUBSET SIZE
+    files_to_compare = [
+        "Project/logs/Transformer/20260202_175409_TRANS_S20000_B0.00.log",
+        "Project/logs/Transformer/20260202_092805_TRANS_S50000_B0.00.log",
+        "Project/logs/Transformer/20260202_112600_TRANS_S70000_B0.00.log"
+    ]
+
+    comparator.compare_logs(files_to_compare)
