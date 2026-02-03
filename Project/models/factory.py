@@ -28,10 +28,10 @@ def get_model_architecture(model_type, device, vocab_size=20000):
     ---------------------------------------------
     Calibrated parameters based on architectural phenotype:
     
-    - LSTM (The Tailor): Maintains statistical conservatism (Dropout 0.1). 
+    - LSTM: Maintains statistical conservatism (Dropout 0.1). 
       Recurrent nets are naturally regularized by their sequential nature.
       
-    - TRANSFORMER (The Titan): Employs aggressive regularization (Dropout 0.3) 
+    - TRANSFORMER: Employs aggressive regularization (Dropout 0.3) 
       to disrupt rote learning (memorization) of fixed strings, forcing the 
       attention heads to learn generalized syntactic patterns.
     """
@@ -63,7 +63,7 @@ def get_model_architecture(model_type, device, vocab_size=20000):
     # ARCHITECTURE A: LSTM + BAHDANAU ATTENTION
     # Uses a neural network layer to learn alignments (Additive Attention).
     if model_type == "lstm_bahdanau":
-        logger.info(f"🏗️ Factory: Generating LSTM + Bahdanau (Conservative Dropout: {lstm_params['dropout']})")
+        logger.info(f"Factory: Generating LSTM + Bahdanau (Conservative Dropout: {lstm_params['dropout']})")
         return Seq2SeqBahdanau(
             vocab_size=vocab_size, 
             emb_dim=lstm_params["emb_dim"], 
@@ -76,7 +76,7 @@ def get_model_architecture(model_type, device, vocab_size=20000):
     # ARCHITECTURE B: LSTM + DOTPRODUCT ATTENTION
     # Scaled Dot-Product alignment mechanism (Geometric/Multiplicative Attention).
     elif model_type == "lstm_dotproduct":
-        logger.info(f"🏗️ Factory: Generating LSTM + DotProduct (Conservative Dropout: {lstm_params['dropout']})")
+        logger.info(f"Factory: Generating LSTM + DotProduct (Conservative Dropout: {lstm_params['dropout']})")
         return Seq2SeqDotProduct(
             vocab_size=vocab_size, 
             emb_dim=lstm_params["emb_dim"], 
@@ -89,7 +89,7 @@ def get_model_architecture(model_type, device, vocab_size=20000):
     # ARCHITECTURE C: TRANSFORMER (Attention Is All You Need)
     # The parallel titan. Requires strict regularization to converge on code logic.
     elif model_type == "transformer":
-        logger.info(f"⚡ Factory: Generating Transformer (Aggressive Dropout: {trans_params['dropout']})")
+        logger.info(f"Factory: Generating Transformer (Aggressive Dropout: {trans_params['dropout']})")
         return Seq2SeqTransformer(
             vocab_size=vocab_size, 
             d_model=trans_params["hid_dim"],
@@ -101,5 +101,5 @@ def get_model_architecture(model_type, device, vocab_size=20000):
 
     # ERROR HANDLING: Prevents the pipeline from entering an undefined state.
     else:
-        logger.error(f"❌ Critical Error: Architecture '{model_type}' not supported by current Factory build.")
+        logger.error(f"Critical Error: Architecture '{model_type}' not supported by current Factory build.")
         raise ValueError(f"Unknown model type requested: {model_type}")

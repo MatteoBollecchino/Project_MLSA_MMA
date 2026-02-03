@@ -27,7 +27,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.2-Origin" 
+PIPELINE_VERSION = "4.4.5-Origin" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
@@ -70,10 +70,12 @@ class CodeSummarizationPipeline:
         self.checkpoint_dir = os.path.join(self.root, "models", "checkpoints")
         self.processed_dir = os.path.join(self.dataset_root, "processed")
 
-        print(f"\n" + "="*60)
-        print(f"C2 ORCHESTRATOR | Version: {PIPELINE_VERSION} | Authors: {AUTHORS}")
+        print(f"\n" + "="*120)
+        print(f"CODE SUMMARIZATION PROJECT | Version: {PIPELINE_VERSION} | Authors: {AUTHORS}")
+        print(f"powered by PyTorch {torch.__version__} |  C2 Orchestrator Initialized")
+        print(f"Vaswani: 'Attention Is All You Need'. NVIDIA: 'Hold my beer...'")
         print(f"Session Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("="*60)
+        print("="*120)
 
         # --- HARDWARE AUDIT & ISOLATION ---
         # Logic to detect and isolate compute resources.
@@ -250,7 +252,7 @@ class CodeSummarizationPipeline:
         evaluator = BatchEvaluator(self.device, self.tokenizer_path, self.checkpoint_dir, self.processed_dir, subset_size=self.eval_samples)
         
         for ckpt in targets:
-            print(f"\n🔍 Analyzing: {ckpt}")
+            print(f"\nAnalyzing: {ckpt}")
             df_res = evaluator.run_all(specific_file=ckpt)
             if df_res is not None:
                 print(df_res.to_string(index=False))

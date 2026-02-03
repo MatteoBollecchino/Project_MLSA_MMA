@@ -116,7 +116,7 @@ class BatchEvaluator:
                         else:
                             new_candidates.append((seq + [next_token], new_score))
                 except Exception as e:
-                    logger.error(f"❌ Critical Search Failure at step {step}: {e}")
+                    logger.error(f"Critical Search Failure at step {step}: {e}")
                     raise e
             
             # SURVIVAL OF THE FITTEST: Prune hypotheses to only the top 'k' based on scores.
@@ -147,7 +147,7 @@ class BatchEvaluator:
 
         checkpoint_path = os.path.join(self.checkpoint_dir, checkpoint_name)
         
-        print(f"\n🧪 Auditing Performance: {model_tag} | {checkpoint_name}")
+        print(f"\nAuditing Performance: {model_tag} | {checkpoint_name}")
         
         try:
             # RE-SYNTHESIS: Reconstruct architecture through the Factory.
@@ -157,9 +157,9 @@ class BatchEvaluator:
             state_dict = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
             model.load_state_dict(state_dict)
             model.eval() # Vital: Disables Dropout/BatchNorm for deterministic evaluation.
-            print(f"✅ Neural Weights Loaded.")
+            print(f"Neural Weights Loaded.")
         except Exception as e:
-            print(f"❌ Load Error [{model_tag}]: {e}")
+            print(f"Load Error [{model_tag}]: {e}")
             return {"file": checkpoint_name, "error": str(e)}
         
         # DATA INGESTION: Targeted Test-split loading.
@@ -180,7 +180,7 @@ class BatchEvaluator:
                     hypotheses.append(pred_text.split()) # Predicted words.
                     references.append([real_text.split()]) # Ground truth (as list of lists).
             except Exception as e:
-                print(f"❌ Inference Error [{model_tag}]: {e}")
+                print(f"Inference Error [{model_tag}]: {e}")
                 return {"file": checkpoint_name, "error": str(e)}
 
         # --- NLP METRIC COMPUTATION ---
@@ -206,12 +206,12 @@ class BatchEvaluator:
         files = [specific_file] if specific_file else [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
         if not files: return None
 
-        print(f"\n🚀 START BATCH EVALUATION (Beam Search k=3)")
+        print(f"\nSTART BATCH EVALUATION (Beam Search k=3)")
         for ckpt in sorted(files):
             res = self.evaluate_single_checkpoint(ckpt)
             if "error" not in res: 
                 self.results.append(res)
             else:
-                print(f"⚠️ Skipping {ckpt} due to load/runtime failure.")
+                print(f"Skipping {ckpt} due to load/runtime failure.")
         
         return pd.DataFrame(self.results)
