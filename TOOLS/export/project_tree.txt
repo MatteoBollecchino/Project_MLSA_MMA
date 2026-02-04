@@ -1,23 +1,32 @@
-Project Tree for: c:\Users\mpiet\Documents\GitHub\Project_MLSA_MMA\Project
-============================================================================
+Project Tree for: c:\Users\xxxAl\Desktop\Magistrale\Machine Learning\Project\Project_MLSA_MMA\Project
+=======================================================================================================
 
 Project/
 ├───C2Orchestrator.py
+├───README.md
 ├───colab_remote_exec.txt
 ├───configs.txt
 ├───evaluate.py
 ├───requirements.txt
 ├───test.py
 ├───test_audit.py
+├───tokenizer.json
 ├───data/
-    ├───README.md
     ├───dataset.py
+    ├───dataset_cleaner.py
     ├───download_dataset.py
+    ├───inspect_corpus.py
     ├───inspect_dataset.py
-    ├───preprocess.py
+    ├───tokenizer.py
 ├───Datasets/
     ├───Human_readable_sample/
         ├───data_preview.txt
+        ├───data_preview_processed.txt
+        ├───data_preview_raw.txt
+    ├───processed/
+        ├───test.jsonl.gz
+        ├───train.jsonl.gz
+        ├───valid.jsonl.gz
     ├───python/
         ├───final/
             ├───jsonl/
@@ -41,20 +50,52 @@ Project/
                 ├───valid/
                     ├───python_valid_0.jsonl.gz
 ├───logs/
-    ├───20260125_142040_TRANS_S10_B0.00.json
-    ├───20260125_142040_TRANS_S10_B0.00.log
+    ├───result_metrics.json
+    ├───Bahdanau/
+        ├───20260201_210033_LSTM__S50000_B0.00.log
+        ├───20260201_215008_LSTM__S20000_B0.00.log
+        ├───20260202_093122_LSTM__S50000_B0.01.log
+        ├───20260202_155459_LSTM__S50000_B0.00.log
+        ├───20260203_002032_LSTM__S70000_B0.01.log
+        ├───20260204_100834_LSTM__S20000_B0.00.log
+    ├───DotProduct/
+        ├───20260201_215511_LSTM__S20000_B0.00.log
+        ├───20260202_151709_LSTM__S20000_B0.00.log
+        ├───20260202_152825_LSTM__S50000_B0.00.log
+        ├───20260202_171614_LSTM__S70000_B0.00.log
+    ├───Transformer/
+        ├───20260201_154722_TRANS_S50000_B0.00.log
+        ├───20260201_181417_TRANS_S50000_B0.00.log
+        ├───20260202_092805_TRANS_S50000_B0.00.log
+        ├───20260202_112600_TRANS_S70000_B0.00.log
+        ├───20260202_175409_TRANS_S20000_B0.00.log
 ├───models/
-    ├───README.md
-    ├───attention.py
-    ├───decoder.py
-    ├───encoder.py
     ├───factory.py
-    ├───seq2seq.py
+    ├───seq2seq_bahdanau.py
+    ├───seq2seq_dotproduct.py
     ├───transformer.py
     ├───checkpoints/
+        ├───20260201_1547_transformer_sub50000.pt
+        ├───20260201_1814_transformer_sub50000.pt
+        ├───20260201_2100_lstm_bahdanau_sub50000.pt
+        ├───20260201_2150_lstm_bahdanau_sub20000.pt
+        ├───20260201_2155_lstm_dotproduct_sub20000.pt
+        ├───20260202_0928_transformer_sub50000.pt
+        ├───20260202_0931_lstm_bahdanau_sub50000.pt
+        ├───20260202_1049_lstm_bahdanau_sub70000.pt
+        ├───20260202_1126_transformer_sub70000.pt
+        ├───20260202_1517_lstm_dotproduct_sub20000.pt
+        ├───20260202_1528_lstm_dotproduct_sub50000.pt
+        ├───20260202_1555_lstm_bahdanau_sub50000.pt
+        ├───20260202_1716_lstm_dotproduct_sub70000.pt
+        ├───20260202_1754_transformer_sub20000.pt
+        ├───20260203_0020_lstm_bahdanau_sub70000.pt
 ├───scripts/
-    ├───README.md
+    ├───3d_efficiency_planes.png
+    ├───ValLossChart.py
+    ├───best_model_trace.png
+    ├───linguistic_audit.png
     ├───log_manager.py
+    ├───log_parser.py
+    ├───temporal_efficiency.png
     ├───train.py
-├───src/
-    ├───README.md
