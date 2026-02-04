@@ -11,7 +11,7 @@
   "Infra (s)": 1.59,
   "Cleaning (s)": 0.12,
   "Tokenizer": "REUSED",
-  "Media Epoca (s)": 262.76
+  "Mean Epoch (s)": 262.76
   },
   {
     "file": "20260202_1555_lstm_bahdanau_sub50000.pt",
@@ -25,7 +25,7 @@
     "Infra (s)": 3.63,
     "Cleaning (s)": 0.38,
     "Tokenizer": "REUSED",
-    "Media Epoca (s)": 705.54
+    "Mean Epoch (s)": 705.54
   },
   {
     "file": "20260203_0020_lstm_bahdanau_sub70000.pt",
@@ -39,7 +39,7 @@
     "Infra (s)": 0.01,
     "Cleaning (s)": 0.0,
     "Tokenizer": "REUSED",
-    "Media Epoca (s)": 1089.69
+    "Mean Epoch (s)": 1089.69
   },
   {
     "file": "20260202_1517_lstm_dotproduct_sub20000.pt",
@@ -53,7 +53,7 @@
     "Infra (s)": 4.85,
     "Cleaning (s)": 0.31,
     "Tokenizer": "REUSED",
-    "Media Epoca (s)": 228.89
+    "Mean Epoch (s)": 228.89
   },
   {
     "file": "20260202_1528_lstm_dotproduct_sub50000.pt",
@@ -67,7 +67,7 @@
     "Infra (s)": 6.64,
     "Cleaning (s)": 0.29,
     "Tokenizer": "REUSED",
-    "Media Epoca (s)": 615.75
+    "Mean Epoch (s)": 615.75
   },
   {
     "file": "20260202_1716_lstm_dotproduct_sub70000.pt",
@@ -81,7 +81,7 @@
     "Infra (s)": 0.02,
     "Cleaning (s)": 0.0,
     "Tokenizer": "REUSED",
-    "Media Epoca (s)": 957.08
+    "Mean Epoch (s)": 957.08
   },
   {
     "file": "20260202_1754_transformer_sub20000.pt",
@@ -95,7 +95,7 @@
     "Infra (s)": 2.08,
     "Cleaning (s)": 0.15,
     "Tokenizer": "REUSED",
-    "Media Epoca (s)": 106.39
+    "Mean Epoch (s)": 106.39
   },
   {
     "file": "20260202_0928_transformer_sub50000.pt",
@@ -109,7 +109,7 @@
     "Infra (s)": 4.35,
     "Cleaning (s)": 0.31,
     "Tokenizer": "REUSED",
-    "Media Epoca (s)": 268.26
+    "Mean Epoch (s)": 268.26
   },
   {
     "file": "20260202_1126_transformer_sub70000.pt",
@@ -123,6 +123,6 @@
     "Infra (s)": 1.83,
     "Cleaning (s)": 0.29,
     "Tokenizer": "REUSED",
-    "Media Epoca (s)": 367.26
+    "Mean Epoch (s)": 367.26
   }
 ]
