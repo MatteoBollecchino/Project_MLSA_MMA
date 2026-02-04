@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-02-03 17:57:52
+Generated on: 2026-02-04 11:17:45
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -35,7 +35,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.5-Origin" 
+PIPELINE_VERSION = "4.4.6-Origin" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
@@ -12334,337 +12334,187 @@ import os
 import numpy as np
 import json
 import pandas as pd
+from mpl_toolkits.mplot3d import Axes3D
+from scipy.interpolate import griddata
+
+# --- [CONFIGURATION] ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+plt.rcParams.update({
+    'font.size': 11, 
+    'figure.titlesize': 16,
+    'axes.titlesize': 13,
+    'axes.labelsize': 11,
+    'legend.fontsize': 10
+})
 
 class LogComparator:
+    """CMU for individual log forensic analysis."""
     def __init__(self):
-        # Regex standard
-        # Group 1: Epoch, Group 2: Train Loss, Group 3: Val Loss
         self.epoch_pattern = re.compile(r"Epoch\s+(\d+)\s+\|\s+Loss:\s+([\d.]+)\s+\|\s+Val:\s+([\d.]+)", re.IGNORECASE)
         self.bleu_pattern = re.compile(r'["\']?bleu["\']?\s*[:=]\s*([\d.]+)', re.IGNORECASE)
         self.rouge_pattern = re.compile(r'["\']?rougeL["\']?\s*[:=]\s*([\d.]+)', re.IGNORECASE)
         self.internal_filename_pattern = re.compile(r'"file"\s*:\s*"([^"]+)"', re.IGNORECASE)
 
     def _get_short_name(self, filepath):
-        filename = os.path.basename(filepath)
-        name = os.path.splitext(filename)[0]
-        name = re.sub(r'^\d{8}_\d{6}_', '', name) # Rimuove timestamp
-        return name
+        name = os.path.splitext(os.path.basename(filepath))[0]
+        return re.sub(r'^\d{8}_\d{6}_', '', name)
 
     def parse_file(self, filepath):
-        default_name = self._get_short_name(filepath)
-        data = {
-            "name": default_name,
-            "epochs": [],
-            "train_loss": [], # Per il plot singolo
-            "val_loss": [],
-            "bleu": None,
-            "rougeL": None
-        }
-
+        data = {"name": self._get_short_name(filepath), "epochs": [], "train_loss": [], "val_loss": [], "bleu": None, "rougeL": None}
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
-
-            # Cerca nome interno
             name_match = self.internal_filename_pattern.search(content)
-            if name_match:
-                clean_name = name_match.group(1).replace(".pt", "")
-                data["name"] = clean_name
-
-            # Estrazione Loss
-            for match in self.epoch_pattern.finditer(content):
-                data["epochs"].append(int(match.group(1)))
-                data["train_loss"].append(float(match.group(2))) # Train
-                data["val_loss"].append(float(match.group(3)))   # Val
-
-            # Estrazione Metriche
-            bleu_match = self.bleu_pattern.search(content)
-            if bleu_match: data["bleu"] = float(bleu_match.group(1))
-
-            rouge_match = self.rouge_pattern.search(content)
-            if rouge_match: data["rougeL"] = float(rouge_match.group(1))
-            
+            if name_match: data["name"] = name_match.group(1).replace(".pt", "")
+            for m in self.epoch_pattern.finditer(content):
+                data["epochs"].append(int(m.group(1)))
+                data["train_loss"].append(float(m.group(2)))
+                data["val_loss"].append(float(m.group(3)))
+            b_m = self.bleu_pattern.search(content)
+            r_m = self.rouge_pattern.search(content)
+            if b_m: data["bleu"] = float(b_m.group(1))
+            if r_m: data["rougeL"] = float(r_m.group(1))
         except Exception as e:
-            print(f"Errore parsing {filepath}: {e}")
-            return None
-            
+            print(f"Parsing error: {e}"); return None
         return data
 
-    def compare_logs(self, file_list):
-        """Metodo principale che decide quale grafico mostrare."""
-        parsed_data = []
-        for f in file_list:
-            if os.path.exists(f):
-                d = self.parse_file(f)
-                if d and d["epochs"]:
-                    parsed_data.append(d)
-            else:
-                print(f"[WARN] File non trovato: {f}")
-
-        if not parsed_data:
-            print("Nessun dato valido trovato.")
-            return
-
-        # --- LOGICA DI SCELTA ---
-        if len(parsed_data) == 1:
-            print(f"Rilevato file singolo: Mostro Training vs Validation per '{parsed_data[0]['name']}'")
-            self._plot_single_mode(parsed_data[0])
-        else:
-            print(f"Rilevati {len(parsed_data)} file: Mostro confronto comparativo.")
-            self._plot_compare_mode(parsed_data)
-
-    # --- MODALITÀ 1: SINGOLO FILE (Train vs Val) ---
-    def _plot_single_mode(self, entry):
-        epochs = entry["epochs"]
-        train_loss = entry["train_loss"]
-        val_loss = entry["val_loss"]
+    def plot_best_model_trace(self, log_path):
+        """Generates high-fidelity training trace for the best model."""
+        data = self.parse_file(log_path)
+        if not data: return
+        plt.figure(figsize=(12, 7))
+        plt.plot(data["epochs"], data["train_loss"], label='Training Loss', color='#3498db', linewidth=2.5, alpha=0.8)
+        plt.plot(data["epochs"], data["val_loss"], label='Validation Loss', color='#e67e22', linewidth=2.5)
         
-        plt.figure(figsize=(12, 6))
-        
-        # Curve
-        plt.plot(epochs, train_loss, label='Training Loss', color='skyblue', linewidth=2)
-        plt.plot(epochs, val_loss, label='Validation Loss', color='orange', linewidth=2)
+        min_loss = min(data["val_loss"])
+        best_epoch = data["val_loss"].index(min_loss) + 1
+        plt.axvline(x=best_epoch, color='#c0392b', linestyle='--', alpha=0.6, label=f'Optimal Stopping (Ep {best_epoch})')
+        plt.scatter(best_epoch, min_loss, color='#c0392b', s=100, zorder=5)
 
-        # Best Model Marker
-        min_val = min(val_loss)
-        best_epoch = epochs[val_loss.index(min_val)]
-        plt.scatter(best_epoch, min_val, color='red', s=100, zorder=5, label='Best Model')
-        plt.annotate(f"Min: {min_val:.4f}", (best_epoch, min_val), 
-                     textcoords="offset points", xytext=(0, -20), ha='center', color='red')
-
-        # Box Metriche
-        bleu_txt = f"{entry['bleu']:.4f}" if entry['bleu'] is not None else "N/A"
-        rouge_txt = f"{entry['rougeL']:.4f}" if entry['rougeL'] is not None else "N/A"
-        info_text = f"BLEU: {bleu_txt}\nROUGE-L: {rouge_txt}"
-        
-        plt.gca().text(0.98, 0.95, info_text, transform=plt.gca().transAxes,
-                       verticalalignment='top', horizontalalignment='right',
-                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.9),
-                       fontsize=11)
-        # Setup Asse X
-        plt.xticks(epochs)
-
-        plt.title(f"Training Dynamics: {entry['name']}", fontsize=14, fontweight='bold')
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.title(f"Best Model Convergence Profile: {data['name']}", pad=20)
+        plt.xlabel("Epochs"); plt.ylabel("Cross-Entropy Loss")
+        plt.legend(frameon=True, facecolor='white', framealpha=0.9)
+        plt.grid(True, linestyle=':', alpha=0.6)
         plt.tight_layout()
-        plt.show()
+        save_path = os.path.join(SCRIPT_DIR, "best_model_trace.png")
+        plt.savefig(save_path, dpi=300); plt.show()
 
-    # --- MODALITÀ 2: MULTIPLI FILE (Confronto) ---
-    def _plot_compare_mode(self, data_list):
-        fig, axes = plt.subplots(1, 2, figsize=(18, 6))
-        fig.suptitle("Model Comparison: Dynamics & Metrics", fontsize=16, fontweight='bold')
-
-        # 1. Curve Validation Loss
-        ax_loss = axes[0]
-        max_epochs_found = 0
-        
-        for entry in data_list:
-            ax_loss.plot(entry["epochs"], entry["val_loss"], 
-                         label=entry["name"], linewidth=2, marker='o', markersize=4, alpha=0.8)
-            
-            # Segna minimo
-            min_loss = min(entry["val_loss"])
-            best_epoch = entry["epochs"][entry["val_loss"].index(min_loss)]
-            ax_loss.scatter(best_epoch, min_loss, s=60, edgecolors='black', zorder=10)
-            
-            max_epochs_found = max(max_epochs_found, max(entry["epochs"]))
-
-        # Ticks asse X
-        ax_loss.set_xticks(range(1, max_epochs_found + 1))
-
-        ax_loss.set_title("Validation Loss Evolution")
-        ax_loss.set_xlabel("Epochs")
-        ax_loss.set_ylabel("Validation Loss")
-        ax_loss.legend(fontsize='small')
-        ax_loss.grid(True, linestyle='--', alpha=0.5)
-
-        # 2. Bar Chart Metriche
-        ax_metrics = axes[1]
-        names = [d["name"] for d in data_list]
-        # Usa 0.0 se None per evitare crash nel plot
-        bleus = [d["bleu"] if d["bleu"] else 0.0 for d in data_list]
-        rouges = [d["rougeL"] if d["rougeL"] else 0.0 for d in data_list]
-
-        x = np.arange(len(names))
-        width = 0.35
-
-        rects1 = ax_metrics.bar(x - width/2, bleus, width, label='BLEU', color='royalblue', alpha=0.8)
-        rects2 = ax_metrics.bar(x + width/2, rouges, width, label='ROUGE-L', color='seagreen', alpha=0.8)
-
-        ax_metrics.set_title("Final Evaluation Metrics")
-        ax_metrics.set_xticks(x)
-        ax_metrics.set_xticklabels(names, rotation=15, ha="right")
-        ax_metrics.legend()
-        ax_metrics.grid(axis='y', linestyle='--', alpha=0.5)
-
-        def autolabel(rects):
-            for rect in rects:
-                height = rect.get_height()
-                if height > 0:
-                    ax_metrics.annotate(f'{height:.5f}', # 5 decimali qui
-                                xy=(rect.get_x() + rect.get_width() / 2, height),
-                                xytext=(0, 3), textcoords="offset points",
-                                ha='center', va='bottom', fontsize=9)
-
-        autolabel(rects1)
-        autolabel(rects2)
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plt.show()
+# --- [VISUALIZATION ENGINE] ---
 
 def extract_subset_size(filename):
-    """Estrae la dimensione del subset dal nome del file."""
-    if not filename: return 0
     match = re.search(r"sub(\d+)", filename, re.IGNORECASE)
     return int(match.group(1)) if match else 0
 
-def plot_metrics(filepath):
-    # --- 1. CARICAMENTO DATI ---
-    if not os.path.exists(filepath):
-        print(f"File non trovato: {filepath}")
-        return
+def plot_linguistic_metrics(df):
+    """Section 1: Spaced 2x2 grid for Core NLP Metrics."""
+    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+    metrics = [('bleu', 'BLEU Score'), ('rougeL', 'ROUGE-L Score'), ('loss', 'Final Val Loss'), ('perplexity', 'Perplexity')]
+    models = df['model'].unique(); subsets = sorted(df['subset_size'].unique())
+    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(subsets)))
+    x = np.arange(len(models)); w = 0.8 / len(subsets)
 
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"Errore lettura JSON: {e}")
-        return
+    for idx, (col, title) in enumerate(metrics):
+        ax = axes[idx//2, idx%2]
+        for i, s in enumerate(subsets):
+            sub_df = df[df['subset_size'] == s]
+            vals = [sub_df[sub_df['model']==m][col].values[0] if not sub_df[sub_df['model']==m].empty else 0 for m in models]
+            ax.bar(x + (i - len(subsets)/2)*w + w/2, vals, w, color=colors[i], label=f"Size: {s}" if idx==0 else "", edgecolor='white', alpha=0.9)
+        ax.set_title(title, fontweight='bold', pad=10)
+        ax.set_xticks(x); ax.set_xticklabels(models); ax.grid(axis='y', linestyle='--', alpha=0.4)
 
-    df = pd.DataFrame(data)
-    df['subset_size'] = df['file'].apply(extract_subset_size)
-    df = df.sort_values(by='subset_size')
+    fig.legend(*(axes[0,0].get_legend_handles_labels()), loc='upper center', ncol=len(subsets), bbox_to_anchor=(0.5, 0.97), frameon=False)
+    plt.subplots_adjust(wspace=0.3, hspace=0.4, top=0.9)
+    plt.savefig(os.path.join(SCRIPT_DIR, "linguistic_audit.png"), dpi=300); plt.show()
 
+def plot_temporal_efficiency(df):
+    """Section 2: Detailed Spaced Temporal Costs."""
+    fig, axes = plt.subplots(1, 3, figsize=(20, 7))
+    configs = [('Media Epoca (s)', 'Epoch Duration (s)'), ('throughput', 'Throughput (Samples/s)'), ('time_per_1k', 'Cost per 1k Samples (s)')]
+    models = df['model'].unique(); subsets = sorted(df['subset_size'].unique())
+    colors = plt.cm.plasma(np.linspace(0.1, 0.9, len(subsets)))
+    x = np.arange(len(models)); w = 0.8 / len(subsets)
+
+    for idx, (col, title) in enumerate(configs):
+        ax = axes[idx]
+        for i, s in enumerate(subsets):
+            sub_df = df[df['subset_size'] == s]
+            vals = [sub_df[sub_df['model']==m][col].values[0] if not sub_df[sub_df['model']==m].empty else 0 for m in models]
+            ax.bar(x + (i - len(subsets)/2)*w + w/2, vals, w, color=colors[i], edgecolor='white')
+        ax.set_title(title, fontweight='bold', pad=15)
+        ax.set_xticks(x); ax.set_xticklabels(models, rotation=90); ax.grid(axis='y', linestyle='--', alpha=0.3)
+
+    plt.subplots_adjust(wspace=0.35, bottom=0.2)
+    plt.savefig(os.path.join(SCRIPT_DIR, "temporal_efficiency.png"), dpi=300); plt.show()
+
+def plot_3d_intersecting_planes(df):
+    """Section 3: High-Visibility 3D Planes (Time-Loss-ROUGE)."""
+    fig = plt.figure(figsize=(14, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    
     models = df['model'].unique()
+    # Distinct palettes for surfaces
+    cmaps = ['Blues', 'Oranges', 'Greens', 'Reds']
     
-    # Mappa colori fissa
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    color_map = {model: colors[i % len(colors)] for i, model in enumerate(models)}
-    markers = ['o', 's', '^', 'D', 'v']
-    marker_map = {model: markers[i % len(markers)] for i, model in enumerate(models)}
-
-    # --- 2. CONFIGURAZIONE GRIGLIA 2x2 ---
-    # Creiamo 4 subplot (2 righe, 2 colonne)
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle('Comparison Model Performance', fontsize=16, fontweight='bold')
-
-    # Appiattiamo l'array degli assi per iterarci facilmente (da [[ax1,ax2],[ax3,ax4]] a [ax1,ax2,ax3,ax4])
-    ax_flat = axes.flatten()
-
-    # Configurazione delle 4 metriche
-    metrics_config = [
-        # Riga 1
-        {"col": "bleu",       "title": "BLEU Score (Higher is Better)", "ylabel": "Score"},
-        {"col": "rougeL",     "title": "ROUGE-L Score (Higher is Better)", "ylabel": "Score"},
-        # Riga 2
-        {"col": "loss",       "title": "Validation Loss (Lower is Better)", "ylabel": "Loss"},
-        {"col": "perplexity", "title": "Perplexity (Lower is Better)", "ylabel": "PPL"} 
-    ]
-
-    # --- 3. PLOTTING ---
-    for i, config in enumerate(metrics_config):
-        ax = ax_flat[i]
-        metric_col = config["col"]
+    for i, model in enumerate(models):
+        d = df[df['model'] == model]
+        if len(d) < 3: continue # Need at least 3 points for a plane
         
-        for model in models:
-            subset = df[df['model'] == model]
-            
-            ax.plot(
-                subset['subset_size'], 
-                subset[metric_col], 
-                marker=marker_map[model], 
-                color=color_map[model], 
-                linewidth=2, 
-                label=model,
-                alpha=0.8
-            )
-            
-            # Annotazioni sui punti
-            for x, y in zip(subset['subset_size'], subset[metric_col]):
-                # Formattazione: Perplexity senza decimali se grande, o 2 decimali
-                if metric_col == "perplexity":
-                    fmt = "{:.0f}" # Es: 1551
-                elif metric_col == "loss":
-                    fmt = "{:.2f}" # Es: 7.35
-                else:
-                    fmt = "{:.4f}" # Es: 0.0051 (Metriche)
-                
-                ax.annotate(fmt.format(y), (x, y), xytext=(0, 8), textcoords="offset points", ha='center', fontsize=8)
-
-        ax.set_title(config["title"], fontsize=12, fontweight='bold', color='#333333')
-        ax.set_ylabel(config["ylabel"])
-        ax.grid(True, linestyle='--', alpha=0.5)
+        # Data extraction
+        x = d['Media Epoca (s)'].values
+        y = d['loss'].values
+        z = d['rougeL'].values
         
-        # Forza i tick sull'asse X per mostrare le dimensioni esatte
-        unique_sizes = sorted(df['subset_size'].unique())
-        ax.set_xticks(unique_sizes)
+        # Grid creation for surface interpolation
+        xi = np.linspace(x.min(), x.max(), 20)
+        yi = np.linspace(y.min(), y.max(), 20)
+        XI, YI = np.meshgrid(xi, yi)
+        ZI = griddata((x, y), z, (XI, YI), method='linear')
+        
+        # Plot Surface
+        surf = ax.plot_surface(XI, YI, ZI, cmap=cmaps[i % len(cmaps)], alpha=0.6, edgecolor='none', label=model)
+        # Add original scatter points for grounding
+        ax.scatter(x, y, z, s=60, edgecolors='black', alpha=1.0)
 
-    # Legenda Unica (spostata in basso o a lato)
-    handles, labels = ax_flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=len(models), frameon=False)
-
-    # Aggiustiamo il layout per far spazio al titolo e alla legenda
-    plt.tight_layout(rect=[0, 0, 1, 0.93])
-    plt.show()
-
-def main():
-
-    # Plot delle metriche di tutti i modelli
-    json_file = "Project/logs/result_metrics.json"
-    plot_metrics(json_file)
-
-    # 1. Definisci i file che vuoi confrontare manualmente
-    files_to_compare = [
-        "Project/logs/Bahdanau/20260201_210033_LSTM__S50000_B0.00.log"
-    ]
-
-    # 2. Crea il comparatore ed esegui
-    comparator = LogComparator()
-    comparator.compare_logs(files_to_compare)
-
-    # ESEMPIO 1: CONFRONTO TRA DIVERSI MODELLI MA STESSO SUBSET SIZE
-    files_to_compare = [
-        "Project/logs/Bahdanau/20260201_215008_LSTM__S20000_B0.00.log",
-        "Project/logs/DotProduct/20260201_215511_LSTM__S20000_B0.00.log",
-        "Project/logs/Transformer/20260202_175409_TRANS_S20000_B0.00.log"
-    ]
+    ax.set_title("3D Efficiency Planes: Time vs. Loss vs. ROUGE-L", pad=30, fontweight='bold')
+    ax.set_xlabel("Epoch Time (s)", labelpad=15)
+    ax.set_ylabel("Validation Loss", labelpad=15)
+    ax.set_zlabel("ROUGE-L Score", labelpad=15)
     
-    comparator.compare_logs(files_to_compare)
+    # Custom legend for surfaces (Matplotlib fix)
+    from matplotlib.lines import Line2D
+    custom_lines = [Line2D([0], [0], color=plt.get_cmap(cmaps[i])(0.5), lw=4) for i in range(len(models))]
+    ax.legend(custom_lines, models, loc='upper left', bbox_to_anchor=(0.1, 0.9))
 
+    ax.view_init(elev=25, azim=-45) # Optimal angle for intersection visibility
+    plt.tight_layout()
+    plt.savefig(os.path.join(SCRIPT_DIR, "3d_efficiency_planes.png"), dpi=300); plt.show()
 
-    # ESEMPIO 2: CONFRONTO TRA STESSI MODELLI MA DIVERSI SUBSET SIZE
-    files_to_compare = [
-        "Project/logs/Bahdanau/20260202_155459_LSTM__S50000_B0.00.log",
-        "Project/logs/Bahdanau/20260203_002032_LSTM__S70000_B0.01.log",
-    ]
+# --- [MAIN EXECUTION] ---
 
-    comparator.compare_logs(files_to_compare)
-
-    # ESEMPIO 3: CONFRONTO TRA STESSI MODELLI MA DIVERSI SUBSET SIZE
-    files_to_compare = [
-        "Project/logs/DotProduct/20260202_151709_LSTM__S20000_B0.00.log",
-        "Project/logs/DotProduct/20260202_152825_LSTM__S50000_B0.00.log",
-        "Project/logs/DotProduct/20260202_171614_LSTM__S70000_B0.00.log"
-    ]
-
-    comparator.compare_logs(files_to_compare)
-
-    # ESEMPIO 4: CONFRONTO TRA STESSI MODELLI MA DIVERSI SUBSET SIZE
-    files_to_compare = [
-        "Project/logs/Transformer/20260202_175409_TRANS_S20000_B0.00.log",
-        "Project/logs/Transformer/20260202_092805_TRANS_S50000_B0.00.log",
-        "Project/logs/Transformer/20260202_112600_TRANS_S70000_B0.00.log"
-    ]
-
-    comparator.compare_logs(files_to_compare)
-
-# --- ESEMPIO DI UTILIZZO ---
 if __name__ == "__main__":
-    main()
+    json_path = "Project/logs/result_metrics.json"
     
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f: df = pd.DataFrame(json.load(f))
+        
+        # Feature Engineering
+        df['subset_size'] = df['file'].apply(extract_subset_size)
+        df['Media Epoca (s)'] = pd.to_numeric(df['Media Epoca (s)'], errors='coerce').fillna(0)
+        df['throughput'] = df['subset_size'] / df['Media Epoca (s)']
+        df['time_per_1k'] = (df['Media Epoca (s)'] / df['subset_size']) * 1000
+        df = df.sort_values(by='subset_size')
+
+        # Run Sectioned Audit
+        plot_linguistic_metrics(df)
+        plot_temporal_efficiency(df)
+        plot_3d_intersecting_planes(df)
+    else:
+        print(f"[ERROR] Metrics file missing: {json_path}")
+
+    # Final trace: Bahdanau 70k Champion
+    best_log = "Project/logs/Bahdanau/20260203_002032_LSTM__S70000_B0.01.log"
+    if os.path.exists(best_log):
+        LogComparator().plot_best_model_trace(best_log)
 
 ================================================================================
 

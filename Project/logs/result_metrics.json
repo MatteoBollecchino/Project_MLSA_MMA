@@ -5,7 +5,13 @@
     "bleu": 0.005143,
     "rougeL": 0.198508,
     "loss": 7.346938,
-    "perplexity": 1551.438613
+    "perplexity": 1551.438613,
+    "Subset": "70000",
+    "Hardware": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "Infra (s)": 0.01,
+    "Cleaning (s)": 0.0,
+    "Tokenizer": "REUSED",
+    "Media Epoca (s)": 1089.69
   },
   {
     "file": "20260202_1754_transformer_sub20000.pt",
@@ -13,23 +19,41 @@
     "bleu": 0.000974,
     "rougeL": 0.104275,
     "loss": 8.111445,
-    "perplexity": 3332.390887
+    "perplexity": 3332.390887,
+    "Subset": "20000",
+    "Hardware": "Tesla T4",
+    "Infra (s)": 2.08,
+    "Cleaning (s)": 0.15,
+    "Tokenizer": "REUSED",
+    "Media Epoca (s)": 106.39
   },
   {
     "file": "20260202_1716_lstm_dotproduct_sub70000.pt",
     "model": "lstm_dotproduct",
     "bleu": 0.000784,
     "rougeL": 0.151645,
-    "loss": 7.434360,
-    "perplexity": 1693.174364
+    "loss": 7.43436,
+    "perplexity": 1693.174364,
+    "Subset": "70000",
+    "Hardware": "NVIDIA GeForce RTX 3060 Laptop GPU",
+    "Infra (s)": 0.02,
+    "Cleaning (s)": 0.0,
+    "Tokenizer": "REUSED",
+    "Media Epoca (s)": 957.08
   },
   {
     "file": "20260202_1555_lstm_bahdanau_sub50000.pt",
     "model": "lstm_bahdanau",
-    "bleu": 0.002430,
+    "bleu": 0.00243,
     "rougeL": 0.177062,
     "loss": 7.403968,
-    "perplexity": 1642.488389
+    "perplexity": 1642.488389,
+    "Subset": "50000",
+    "Hardware": "Tesla T4",
+    "Infra (s)": 3.63,
+    "Cleaning (s)": 0.38,
+    "Tokenizer": "REUSED",
+    "Media Epoca (s)": 705.54
   },
   {
     "file": "20260202_1528_lstm_dotproduct_sub50000.pt",
@@ -37,7 +61,13 @@
     "bleu": 0.000638,
     "rougeL": 0.133393,
     "loss": 7.501983,
-    "perplexity": 1811.631864
+    "perplexity": 1811.631864,
+    "Subset": "50000",
+    "Hardware": "Tesla T4",
+    "Infra (s)": 6.64,
+    "Cleaning (s)": 0.29,
+    "Tokenizer": "REUSED",
+    "Media Epoca (s)": 615.75
   },
   {
     "file": "20260202_1517_lstm_dotproduct_sub20000.pt",
@@ -45,7 +75,13 @@
     "bleu": 0.000463,
     "rougeL": 0.140666,
     "loss": 7.501385,
-    "perplexity": 1810.548812
+    "perplexity": 1810.548812,
+    "Subset": "20000",
+    "Hardware": "Tesla T4",
+    "Infra (s)": 4.85,
+    "Cleaning (s)": 0.31,
+    "Tokenizer": "REUSED",
+    "Media Epoca (s)": 228.89
   },
   {
     "file": "20260202_1126_transformer_sub70000.pt",
@@ -53,23 +89,13 @@
     "bleu": 0.001043,
     "rougeL": 0.135388,
     "loss": 7.926703,
-    "perplexity": 2770.279137
-  },
-  {
-    "file": "20260202_1049_lstm_bahdanau_sub70000.pt",
-    "model": "lstm_bahdanau",
-    "bleu": 0.005760,
-    "rougeL": 0.191871,
-    "loss": 7.763483,
-    "perplexity": 2353.085754
-  },
-  {
-    "file": "20260202_0931_lstm_bahdanau_sub50000.pt",
-    "model": "lstm_bahdanau",
-    "bleu": 0.005471,
-    "rougeL": 0.177193,
-    "loss": 7.640880,
-    "perplexity": 2081.575468
+    "perplexity": 2770.279137,
+    "Subset": "70000",
+    "Hardware": "Tesla T4",
+    "Infra (s)": 1.83,
+    "Cleaning (s)": 0.29,
+    "Tokenizer": "REUSED",
+    "Media Epoca (s)": 367.26
   },
   {
     "file": "20260202_0928_transformer_sub50000.pt",
@@ -77,38 +103,12 @@
     "bleu": 0.000988,
     "rougeL": 0.123286,
     "loss": 8.057272,
-    "perplexity": 3156.668337
-  },
-  {
-    "file": "20260201_2150_lstm_bahdanau_sub20000.pt",
-    "model": "lstm_bahdanau",
-    "bleu": 0.002231,
-    "rougeL": 0.142595,
-    "loss": 7.736458,
-    "perplexity": 2290.344769
-  },
-  {
-    "file": "20260201_2100_lstm_bahdanau_sub50000.pt",
-    "model": "lstm_bahdanau",
-    "bleu": 0.004410,
-    "rougeL": 0.178163,
-    "loss": 7.862589,
-    "perplexity": 2598.238902
-  },
-  {
-    "file": "20260201_1814_transformer_sub50000.pt",
-    "model": "transformer",
-    "bleu": 0.001045,
-    "rougeL": 0.112891,
-    "loss": 8.391679,
-    "perplexity": 4410.214928
-  },
-  {
-    "file": "20260201_1547_transformer_sub50000.pt",
-    "model": "transformer",
-    "bleu": 0.000883,
-    "rougeL": 0.105263,
-    "loss": 8.012231,
-    "perplexity": 3017.641554
+    "perplexity": 3156.668337,
+    "Subset": "50000",
+    "Hardware": "Tesla T4",
+    "Infra (s)": 4.35,
+    "Cleaning (s)": 0.31,
+    "Tokenizer": "REUSED",
+    "Media Epoca (s)": 268.26
   }
 ]
