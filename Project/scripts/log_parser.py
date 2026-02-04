@@ -151,51 +151,6 @@ def plot_temporal_efficiency(df):
     plt.savefig(os.path.join(SCRIPT_DIR, "temporal_efficiency.png"), dpi=300); 
     plt.show()
 
-def plot_3d_intersecting_planes(df):
-    """Section 3: High-Visibility 3D Planes (Time-Loss-ROUGE)."""
-
-    fig = plt.figure(figsize=(14, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    
-    models = df['model'].unique()
-    # Distinct palettes for surfaces
-    cmaps = ['Blues', 'Oranges', 'Greens', 'Reds']
-    
-    for i, model in enumerate(models):
-        d = df[df['model'] == model]
-        if len(d) < 3: continue # Need at least 3 points for a plane
-        
-        # Data extraction
-        x = d['Mean Epoch (s)'].values
-        y = d['loss'].values
-        z = d['rougeL'].values
-        
-        # Grid creation for surface interpolation
-        xi = np.linspace(x.min(), x.max(), 20)
-        yi = np.linspace(y.min(), y.max(), 20)
-        XI, YI = np.meshgrid(xi, yi)
-        ZI = griddata((x, y), z, (XI, YI), method='linear')
-        
-        # Plot Surface
-        surf = ax.plot_surface(XI, YI, ZI, cmap=cmaps[i % len(cmaps)], alpha=0.6, edgecolor='none', label=model)
-        # Add original scatter points for grounding
-        ax.scatter(x, y, z, s=60, edgecolors='black', alpha=1.0)
-
-    ax.set_title("3D Efficiency Planes: Time vs. Loss vs. ROUGE-L", pad=30, fontweight='bold')
-    ax.set_xlabel("Epoch Time (s)", labelpad=15)
-    ax.set_ylabel("Validation Loss", labelpad=15)
-    ax.set_zlabel("ROUGE-L Score", labelpad=15)
-    
-    # Custom legend for surfaces (Matplotlib fix)
-    from matplotlib.lines import Line2D
-    custom_lines = [Line2D([0], [0], color=plt.get_cmap(cmaps[i])(0.5), lw=4) for i in range(len(models))]
-    ax.legend(custom_lines, models, loc='upper left', bbox_to_anchor=(0.1, 0.9))
-
-    ax.view_init(elev=25, azim=-45) # Optimal angle for intersection visibility
-    plt.tight_layout()
-    plt.savefig(os.path.join(SCRIPT_DIR, "3d_efficiency_planes.png"), dpi=300); 
-    plt.show()
-
 # --- [MAIN EXECUTION] ---
 
 if __name__ == "__main__":
@@ -214,7 +169,6 @@ if __name__ == "__main__":
         # Run Sectioned Audit
         plot_linguistic_metrics(df)
         plot_temporal_efficiency(df)
-        plot_3d_intersecting_planes(df)
     else:
         print(f"[ERROR] Metrics file missing: {json_path}")
 
