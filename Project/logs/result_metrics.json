@@ -80,14 +80,6 @@
     "perplexity": 3156.668337
   },
   {
-    "file": "20260201_2155_lstm_dotproduct_sub20000.pt",
-    "model": "lstm_dotproduct",
-    "bleu": 0.001603,
-    "rougeL": 0.132378,
-    "loss": 7.571240,
-    "perplexity": 1941.545387
-  },
-  {
     "file": "20260201_2150_lstm_bahdanau_sub20000.pt",
     "model": "lstm_bahdanau",
     "bleu": 0.002231,

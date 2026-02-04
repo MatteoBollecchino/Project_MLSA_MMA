@@ -4,7 +4,6 @@ import os
 import numpy as np
 import json
 import pandas as pd
-from matplotlib.ticker import MaxNLocator
 
 class LogComparator:
     def __init__(self):
@@ -206,79 +205,110 @@ def plot_metrics(filepath):
         return
 
     df = pd.DataFrame(data)
+    # Assumiamo che la funzione extract_subset_size sia definita altrove
     df['subset_size'] = df['file'].apply(extract_subset_size)
+    
+    # Ordiniamo per subset size per coerenza visiva (barre crescenti)
     df = df.sort_values(by='subset_size')
 
+    # Identifichiamo modelli unici e dimensioni uniche
     models = df['model'].unique()
+    subset_sizes = df['subset_size'].unique()
+    subset_sizes.sort()
     
-    # Mappa colori fissa
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-    color_map = {model: colors[i % len(colors)] for i, model in enumerate(models)}
-    markers = ['o', 's', '^', 'D', 'v']
-    marker_map = {model: markers[i % len(markers)] for i, model in enumerate(models)}
+    n_models = len(models)
+    n_subsets = len(subset_sizes)
 
+    # --- CONFIGURAZIONE COLORI (per Subset Size) ---
+    # Usiamo una mappa di colori diversa per distinguere le dimensioni dei dati
+    # Es: gradazioni di blu o colori distinti
+    colors = plt.cm.viridis(np.linspace(0.2, 0.8, n_subsets)) 
+    
     # --- 2. CONFIGURAZIONE GRIGLIA 2x2 ---
-    # Creiamo 4 subplot (2 righe, 2 colonne)
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     fig.suptitle('Comparison Model Performance', fontsize=16, fontweight='bold')
 
-    # Appiattiamo l'array degli assi per iterarci facilmente (da [[ax1,ax2],[ax3,ax4]] a [ax1,ax2,ax3,ax4])
     ax_flat = axes.flatten()
 
-    # Configurazione delle 4 metriche
     metrics_config = [
-        # Riga 1
         {"col": "bleu",       "title": "BLEU Score (Higher is Better)", "ylabel": "Score"},
         {"col": "rougeL",     "title": "ROUGE-L Score (Higher is Better)", "ylabel": "Score"},
-        # Riga 2
         {"col": "loss",       "title": "Validation Loss (Lower is Better)", "ylabel": "Loss"},
         {"col": "perplexity", "title": "Perplexity (Lower is Better)", "ylabel": "PPL"} 
     ]
+
+    # --- CONFIGURAZIONE BARRE ---
+    # Larghezza totale disponibile per ogni gruppo (modello) = 0.8
+    # Larghezza singola barra = 0.8 / numero di subset
+    total_width = 0.8
+    bar_width = total_width / n_subsets
+    
+    # Indici asse X (uno per ogni modello)
+    x_indices = np.arange(n_models)
 
     # --- 3. PLOTTING ---
     for i, config in enumerate(metrics_config):
         ax = ax_flat[i]
         metric_col = config["col"]
         
-        for model in models:
-            subset = df[df['model'] == model]
+        # Iteriamo su ogni dimensione del dataset (ogni subset diventa una barra colorata)
+        for j, size in enumerate(subset_sizes):
+            # Filtriamo i valori per questa specifica dimensione
+            subset_data = df[df['subset_size'] == size]
             
-            ax.plot(
-                subset['subset_size'], 
-                subset[metric_col], 
-                marker=marker_map[model], 
-                color=color_map[model], 
-                linewidth=2, 
-                label=model,
-                alpha=0.8
-            )
-            
-            # Annotazioni sui punti
-            for x, y in zip(subset['subset_size'], subset[metric_col]):
-                # Formattazione: Perplexity senza decimali se grande, o 2 decimali
-                if metric_col == "perplexity":
-                    fmt = "{:.0f}" # Es: 1551
-                elif metric_col == "loss":
-                    fmt = "{:.2f}" # Es: 7.35
+            # Dobbiamo allineare i dati all'ordine dei modelli in 'models'
+            # Creiamo una lista di valori ordinata in base a 'models'
+            values = []
+            for model in models:
+                row = subset_data[subset_data['model'] == model]
+                if not row.empty:
+                    values.append(row[metric_col].values[0])
                 else:
-                    fmt = "{:.4f}" # Es: 0.0051 (Metriche)
-                
-                ax.annotate(fmt.format(y), (x, y), xytext=(0, 8), textcoords="offset points", ha='center', fontsize=8)
+                    values.append(0) # O np.nan se preferisci non plottare nulla
 
-        ax.set_title(config["title"], fontsize=12, fontweight='bold', color='#333333')
+            # Calcolo offset per centrare il gruppo di barre
+            # j va da 0 a n_subsets-1. 
+            offset = (j - n_subsets / 2) * bar_width + (bar_width / 2)
+            
+            # Plot della barra
+            rects = ax.bar(
+                x_indices + offset, 
+                values, 
+                bar_width, 
+                label=f"Size: {size}" if i == 0 else "", # Label solo nel primo grafico per la legenda unica
+                color=colors[j],
+                alpha=0.9,
+                edgecolor='white'
+            )
+
+            # Annotazioni sopra le barre
+            for rect in rects:
+                height = rect.get_height()
+                if height > 0: # Evita di annotare barre vuote
+                    fmt = "{:.5f}"
+                    
+                    ax.annotate(fmt.format(height),
+                                xy=(rect.get_x() + rect.get_width() / 2, height),
+                                xytext=(0, 3),  # 3 points vertical offset
+                                textcoords="offset points",
+                                ha='center', va='bottom', fontsize=8)
+
+        # Configurazione Assi
+        ax.set_title(config["title"], fontsize=10, fontweight='bold', color='#333333')
         ax.set_ylabel(config["ylabel"])
-        ax.grid(True, linestyle='--', alpha=0.5)
         
-        # Forza i tick sull'asse X per mostrare le dimensioni esatte
-        unique_sizes = sorted(df['subset_size'].unique())
-        ax.set_xticks(unique_sizes)
+        # Imposta i nomi dei modelli sull'asse X
+        ax.set_xticks(x_indices)
+        ax.set_xticklabels(models, rotation=0, ha='center', fontsize=10, fontweight='medium')
+        
+        ax.grid(axis='y', linestyle='--', alpha=0.5)
 
-    # Legenda Unica (spostata in basso o a lato)
+    # --- LEGENDA E LAYOUT ---
+    # La legenda ora mostra le dimensioni del dataset (Subset Sizes)
     handles, labels = ax_flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=len(models), frameon=False)
+    fig.legend(handles, labels, title="Training Set Size", loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=n_subsets, frameon=False)
 
-    # Aggiustiamo il layout per far spazio al titolo e alla legenda
-    plt.tight_layout(rect=[0, 0, 1, 0.93])
+    plt.tight_layout(rect=[0, 0, 1, 0.93], h_pad=3.0)
     plt.show()
 
 def main():
@@ -287,6 +317,7 @@ def main():
     json_file = "Project/logs/result_metrics.json"
     plot_metrics(json_file)
 
+    """
     # 1. Definisci i file che vuoi confrontare manualmente
     files_to_compare = [
         "Project/logs/Bahdanau/20260201_210033_LSTM__S50000_B0.00.log"
@@ -331,6 +362,7 @@ def main():
     ]
 
     comparator.compare_logs(files_to_compare)
+    """
 
 # --- ESEMPIO DI UTILIZZO ---
 if __name__ == "__main__":
