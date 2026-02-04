@@ -38,21 +38,21 @@ def train_model(model, train_loader, valid_loader, config, device, telemetry=Non
     # --- [PHASE 0] ARCHITECTURAL AUDIT ---
     # Log total trainable parameters to estimate model capacity and memory footprint.
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"🚀 START | Model: {config.model} | Params: {total_params:,} | Device: {device}")
+    logger.info(f"START | Model: {config.model} | Params: {total_params:,} | Device: {device}")
 
     # Integrity Check: Prevents runtime division errors if the dataset refinery failed.
     steps_per_epoch = len(train_loader)
     if steps_per_epoch == 0:
-        raise ValueError("❌ Error: train_loader is empty. Check data refinery output.")
+        raise ValueError("Error: train_loader is empty. Check data refinery output.")
 
     # --- [PHASE 1] DIFFERENTIATED HYPERPARAMETER INJECTION ---
-    # Mental Model: 'The Transformer' (Titan) needs high pressure regularization 
-    # to avoid memorization, while 'The LSTM' (Tailor) needs guidance.
+    # Mental Model: 'The Transformer' needs high pressure regularization 
+    # to avoid memorization, while 'The LSTM' needs guidance.
     
     if config.model == "transformer":
         # Strategy for Transformers: Prevent 'Dirac Delta' distributions in Softmax.
         weight_decay = 0.1       # Strong L2 penalty to keep weights from exploding.
-        label_smoothing = 0.2    # Soften targets (e.g. 0.9 instead of 1.0) to encourage exploration.
+        label_smoothing = 0.2    # Soften targets to encourage exploration.
         max_lr = 0.0001          # Transformers are sensitive to high LR during the early phase.
         pct_start = 0.3          # 30% of total steps used for warm-up.
     else:
