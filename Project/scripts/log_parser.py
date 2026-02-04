@@ -106,7 +106,8 @@ def plot_linguistic_metrics(df):
     metrics = [('bleu', 'BLEU Score'), ('rougeL', 'ROUGE-L Score'), ('loss', 'Final Val Loss'), ('perplexity', 'Perplexity')]
     models = df['model'].unique(); subsets = sorted(df['subset_size'].unique())
     colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(subsets)))
-    x = np.arange(len(models)); w = 0.8 / len(subsets)
+    x = np.arange(len(models)); 
+    w = 0.8 / len(subsets)
 
     for idx, (col, title) in enumerate(metrics):
         ax = axes[idx//2, idx%2]
@@ -117,7 +118,9 @@ def plot_linguistic_metrics(df):
             ax.bar(x + (i - len(subsets)/2)*w + w/2, vals, w, color=colors[i], label=f"Size: {s}" if idx==0 else "", edgecolor='white', alpha=0.9)
 
         ax.set_title(title, fontweight='bold', pad=10)
-        ax.set_xticks(x); ax.set_xticklabels(models); ax.grid(axis='y', linestyle='--', alpha=0.4)
+        ax.set_xticks(x); 
+        ax.set_xticklabels(models); 
+        ax.grid(axis='y', linestyle='--', alpha=0.4)
 
     fig.legend(*(axes[0,0].get_legend_handles_labels()), loc='upper center', ncol=len(subsets), bbox_to_anchor=(0.5, 0.97), frameon=False)
 
