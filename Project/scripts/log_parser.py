@@ -145,7 +145,9 @@ def plot_temporal_efficiency(df):
             ax.bar(x + (i - len(subsets)/2)*w + w/2, vals, w, color=colors[i], edgecolor='white')
 
         ax.set_title(title, fontweight='bold', pad=15)
-        ax.set_xticks(x); ax.set_xticklabels(models, rotation=90); ax.grid(axis='y', linestyle='--', alpha=0.3)
+        ax.set_xticks(x)
+        ax.set_xticklabels(models, rotation=90)
+        ax.grid(axis='y', linestyle='--', alpha=0.3)
 
     plt.subplots_adjust(wspace=0.35, bottom=0.2)
     plt.savefig(os.path.join(SCRIPT_DIR, "temporal_efficiency.png"), dpi=300); 
