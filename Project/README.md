@@ -4,6 +4,10 @@ The C2 Master Orchestrator is a modular neural pipeline designed for Code Summar
 
 The system follows the "Factory" design pattern to decouple architecture selection from the training loop and implements a strict separation between data ingestion, cleaning, and training.
 
+## Authors
+
+Marco Pietri, Alessandro Nesti, Matteo Bollecchino
+
 ---
 
 ## Project Structure
@@ -20,7 +24,7 @@ The code is organized into the following main directories and files:
 - `Datasets/`: Default directory for storing raw and processed dataset.
 - `logs/`: Directory where execution logs and training metrics are saved.
 - `models/`: Contains neural architecture definitions (e.g., Transformer, LSTM).
-- `scripts/`: Utility scripts and training logic (`train.py`, `log_manager.py`, `log_parser.py`).
+- `scripts/`: Utility scripts and training logic (`train.py`, `log_manager.py`, `log_parser.py`, `compare_models.py`).
 
 - `colab_remote_exec.txt`: Script to be executed in Colab environment to train and evaluate a model
 - `evaluate.py`: Script dedicated to checkpoint evaluation, calculating metrics such as BLEU and ROUGE, and     managing "Audit Mode".
