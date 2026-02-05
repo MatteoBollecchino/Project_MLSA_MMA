@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-02-05 00:31:30
+Generated on: 2026-02-04 11:17:45
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -12697,12 +12697,10 @@ def plot_temporal_efficiency(df):
         ax.set_xticks(x); ax.set_xticklabels(models, rotation=90); ax.grid(axis='y', linestyle='--', alpha=0.3)
 
     plt.subplots_adjust(wspace=0.35, bottom=0.2)
-    plt.savefig(os.path.join(SCRIPT_DIR, "temporal_efficiency.png"), dpi=300); 
-    plt.show()
+    plt.savefig(os.path.join(SCRIPT_DIR, "temporal_efficiency.png"), dpi=300); plt.show()
 
 def plot_3d_intersecting_planes(df):
     """Section 3: High-Visibility 3D Planes (Time-Loss-ROUGE)."""
-
     fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(111, projection='3d')
     
@@ -12715,7 +12713,7 @@ def plot_3d_intersecting_planes(df):
         if len(d) < 3: continue # Need at least 3 points for a plane
         
         # Data extraction
-        x = d['Mean Epoch (s)'].values
+        x = d['Media Epoca (s)'].values
         y = d['loss'].values
         z = d['rougeL'].values
         
@@ -12742,8 +12740,7 @@ def plot_3d_intersecting_planes(df):
 
     ax.view_init(elev=25, azim=-45) # Optimal angle for intersection visibility
     plt.tight_layout()
-    plt.savefig(os.path.join(SCRIPT_DIR, "3d_efficiency_planes.png"), dpi=300); 
-    plt.show()
+    plt.savefig(os.path.join(SCRIPT_DIR, "3d_efficiency_planes.png"), dpi=300); plt.show()
 
 # --- [MAIN EXECUTION] ---
 
@@ -12763,7 +12760,6 @@ if __name__ == "__main__":
         # Run Sectioned Audit
         plot_linguistic_metrics(df)
         plot_temporal_efficiency(df)
-        plot_3d_intersecting_planes(df)
     else:
         print(f"[ERROR] Metrics file missing: {json_path}")
 

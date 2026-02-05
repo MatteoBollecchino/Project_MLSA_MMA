@@ -106,7 +106,8 @@ def plot_linguistic_metrics(df):
     metrics = [('bleu', 'BLEU Score'), ('rougeL', 'ROUGE-L Score'), ('loss', 'Final Val Loss'), ('perplexity', 'Perplexity')]
     models = df['model'].unique(); subsets = sorted(df['subset_size'].unique())
     colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(subsets)))
-    x = np.arange(len(models)); w = 0.8 / len(subsets)
+    x = np.arange(len(models)); 
+    w = 0.8 / len(subsets)
 
     for idx, (col, title) in enumerate(metrics):
         ax = axes[idx//2, idx%2]
@@ -117,7 +118,9 @@ def plot_linguistic_metrics(df):
             ax.bar(x + (i - len(subsets)/2)*w + w/2, vals, w, color=colors[i], label=f"Size: {s}" if idx==0 else "", edgecolor='white', alpha=0.9)
 
         ax.set_title(title, fontweight='bold', pad=10)
-        ax.set_xticks(x); ax.set_xticklabels(models); ax.grid(axis='y', linestyle='--', alpha=0.4)
+        ax.set_xticks(x); 
+        ax.set_xticklabels(models); 
+        ax.grid(axis='y', linestyle='--', alpha=0.4)
 
     fig.legend(*(axes[0,0].get_legend_handles_labels()), loc='upper center', ncol=len(subsets), bbox_to_anchor=(0.5, 0.97), frameon=False)
 
@@ -145,55 +148,12 @@ def plot_temporal_efficiency(df):
             ax.bar(x + (i - len(subsets)/2)*w + w/2, vals, w, color=colors[i], edgecolor='white')
 
         ax.set_title(title, fontweight='bold', pad=15)
-        ax.set_xticks(x); ax.set_xticklabels(models, rotation=90); ax.grid(axis='y', linestyle='--', alpha=0.3)
+        ax.set_xticks(x)
+        ax.set_xticklabels(models, rotation=90)
+        ax.grid(axis='y', linestyle='--', alpha=0.3)
 
     plt.subplots_adjust(wspace=0.35, bottom=0.2)
     plt.savefig(os.path.join(SCRIPT_DIR, "temporal_efficiency.png"), dpi=300); 
-    plt.show()
-
-def plot_3d_intersecting_planes(df):
-    """Section 3: High-Visibility 3D Planes (Time-Loss-ROUGE)."""
-
-    fig = plt.figure(figsize=(14, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    
-    models = df['model'].unique()
-    # Distinct palettes for surfaces
-    cmaps = ['Blues', 'Oranges', 'Greens', 'Reds']
-    
-    for i, model in enumerate(models):
-        d = df[df['model'] == model]
-        if len(d) < 3: continue # Need at least 3 points for a plane
-        
-        # Data extraction
-        x = d['Mean Epoch (s)'].values
-        y = d['loss'].values
-        z = d['rougeL'].values
-        
-        # Grid creation for surface interpolation
-        xi = np.linspace(x.min(), x.max(), 20)
-        yi = np.linspace(y.min(), y.max(), 20)
-        XI, YI = np.meshgrid(xi, yi)
-        ZI = griddata((x, y), z, (XI, YI), method='linear')
-        
-        # Plot Surface
-        surf = ax.plot_surface(XI, YI, ZI, cmap=cmaps[i % len(cmaps)], alpha=0.6, edgecolor='none', label=model)
-        # Add original scatter points for grounding
-        ax.scatter(x, y, z, s=60, edgecolors='black', alpha=1.0)
-
-    ax.set_title("3D Efficiency Planes: Time vs. Loss vs. ROUGE-L", pad=30, fontweight='bold')
-    ax.set_xlabel("Epoch Time (s)", labelpad=15)
-    ax.set_ylabel("Validation Loss", labelpad=15)
-    ax.set_zlabel("ROUGE-L Score", labelpad=15)
-    
-    # Custom legend for surfaces (Matplotlib fix)
-    from matplotlib.lines import Line2D
-    custom_lines = [Line2D([0], [0], color=plt.get_cmap(cmaps[i])(0.5), lw=4) for i in range(len(models))]
-    ax.legend(custom_lines, models, loc='upper left', bbox_to_anchor=(0.1, 0.9))
-
-    ax.view_init(elev=25, azim=-45) # Optimal angle for intersection visibility
-    plt.tight_layout()
-    plt.savefig(os.path.join(SCRIPT_DIR, "3d_efficiency_planes.png"), dpi=300); 
     plt.show()
 
 # --- [MAIN EXECUTION] ---
@@ -214,7 +174,6 @@ if __name__ == "__main__":
         # Run Sectioned Audit
         plot_linguistic_metrics(df)
         plot_temporal_efficiency(df)
-        plot_3d_intersecting_planes(df)
     else:
         print(f"[ERROR] Metrics file missing: {json_path}")
 

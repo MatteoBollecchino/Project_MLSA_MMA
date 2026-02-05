@@ -39,8 +39,8 @@ class DotProductAttention(nn.Module):
         super().__init__()
         # Linear Projections: Mapping raw hidden states into the specialized 
         # Attention Space (Standard practice in modern Transformer-style attention).
-        self.w_q = nn.Linear(hid_dim, hid_dim)
-        self.w_k = nn.Linear(hid_dim, hid_dim)
+        self.w_q = nn.Linear(hid_dim, hid_dim) #(H,H)
+        self.w_k = nn.Linear(hid_dim, hid_dim) #(H,H)
         
         # Scaling Factor: Used to normalize the Dot Product magnitude. 
         # Prevents vanishing gradients by keeping scores within the Softmax 'sweet spot'.
@@ -52,14 +52,18 @@ class DotProductAttention(nn.Module):
             query: Current Decoder state [batch, hid_dim].
             keys: All Encoder outputs [batch, src_len, hid_dim].
         """
+
+        #query:(B,H)
+        #keys:(B,L,H)
+
         # Step 1: Project raw states into the matching Attention Space.
         # q: [batch, 1, hid_dim] | k: [batch, hid_dim, src_len] (transposed for dot product)
-        q = self.w_q(query).unsqueeze(1) 
-        k = self.w_k(keys).transpose(1, 2) 
+        q = self.w_q(query).unsqueeze(1) #(B,H)->(B,1,H)
+        k = self.w_k(keys).transpose(1, 2) #(B,L,H)->(B,H,L)
         
         # Step 2: Scaled Dot Product calculation (BMM = Batch Matrix Multiplication).
         # scores = (Q * K^T) / sqrt(d)
-        scores = torch.bmm(q, k) / self.scale 
+        scores = torch.bmm(q, k) / self.scale #(B,1,L)
         
         # Step 3: Compute Attention Weights (alphas).
         # Softmax over the source sequence length.

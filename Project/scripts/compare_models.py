@@ -69,6 +69,11 @@ def compare_models():
             plt.plot(epochs, losses, marker='o', markersize=4, linestyle='-', 
                      linewidth=2, label=model_name, color=colors.get(model_name, "black"))
             
+            # Highlighting the best epoch
+            min_loss = min(losses)
+            best_epoch = epochs[losses.index(min_loss)]
+            plt.scatter(best_epoch, min_loss, s=60, edgecolors='black', zorder=10)
+
             # Collecting stats for print summary
             min_loss = min(losses)
             final_epoch = epochs[-1]
@@ -77,6 +82,9 @@ def compare_models():
             print(f"{model_name:<20} | {min_loss:.4f}          | {final_epoch}")
         else:
             print(f"{model_name:<20} | NO DATA FOUND")
+
+    # X-axis ticks
+    plt.xticks(epochs)
 
     # Chart Styling
     plt.title('Model Comparison: Subset 20k (Validation Loss)', fontsize=16)
