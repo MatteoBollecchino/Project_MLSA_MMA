@@ -141,9 +141,13 @@ class BatchEvaluator:
                 output = output.contiguous().view(-1, output_dim)
                 trg_loss = trg[:, 1:].contiguous().view(-1)
                 
+                # output shape: [Batch * Seq, Vocab_Size]
+                # trg_loss shape: [Batch * Seq]
+                
                 loss = F.cross_entropy(output, trg_loss, reduction='sum')
                 total_loss += loss.item()
                 total_tokens += trg_loss.numel()
+
 
                 # --- QUALITATIVE ANALYSIS (Decoding) ---
                 predicted_indices = self.beam_decode(model, src, model_tag, beam_width=3)

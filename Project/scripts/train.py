@@ -141,7 +141,7 @@ def train_model(model, train_loader, valid_loader, config, device, telemetry=Non
         status_msg = f"Epoch {epoch+1} | Loss: {avg_train_loss:.4f} | Val: {valid_loss:.4f} | Time: {epoch_duration:.2f}s"
         if valid_loss < best_valid_loss:
             best_valid_loss = valid_loss
-            status_msg += " 🔥 [NEW BEST]"
+            status_msg += "[NEW BEST]"
         
         logger.info(status_msg)
 
