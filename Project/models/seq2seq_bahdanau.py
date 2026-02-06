@@ -37,7 +37,7 @@ class BahdanauAttention(nn.Module):
 
         # Scoring Layer: Projecting the combination of Decoder hidden state 
         # and Encoder outputs into a common latent space.
-        self.attn = nn.Linear(hid_dim * 2, hid_dim)
+        self.attn = nn.Linear(hid_dim * 2, hid_dim) # Score = W_a * [s_{t-1}; h_i] + b: Projecting the fused states into a shared latent space.
 
         # Weighting Vector: A learnable parameter that reduces the projection 
         # to a single scalar (energy score) per source token.
