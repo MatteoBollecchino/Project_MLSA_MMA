@@ -1,0 +1,74 @@
+[
+    {
+        "file": "20260204_1008_lstm_bahdanau_sub20000.pt",
+        "model": "lstm_bahdanau",
+        "bleu": 0.001196,
+        "rougeL": 0.130468,
+        "loss": 7.430621,
+        "perplexity": 1686.854875
+    },
+    {
+        "file": "20260202_1555_lstm_bahdanau_sub50000.pt",
+        "model": "lstm_bahdanau",
+        "bleu": 0.003336,
+        "rougeL": 0.166279,
+        "loss": 7.304191,
+        "perplexity": 1486.516545
+    },
+    {
+        "file": "20260203_0020_lstm_bahdanau_sub70000.pt",
+        "model": "lstm_bahdanau",
+        "bleu": 0.004914,
+        "rougeL": 0.182464,
+        "loss": 7.255349,
+        "perplexity": 1415.657133
+    },
+    {
+        "file": "20260202_1517_lstm_dotproduct_sub20000.pt",
+        "model": "lstm_dotproduct",
+        "bleu": 0.000436,
+        "rougeL": 0.1346,
+        "loss": 7.406355,
+        "perplexity": 1646.413756
+    },
+    {
+        "file": "20260202_1528_lstm_dotproduct_sub50000.pt",
+        "model": "lstm_dotproduct",
+        "bleu": 0.000411,
+        "rougeL": 0.135201,
+        "loss": 7.39837,
+        "perplexity": 1633.320293
+    },
+    {
+        "file": "20260202_1716_lstm_dotproduct_sub70000.pt",
+        "model": "lstm_dotproduct",
+        "bleu": 0.000787,
+        "rougeL": 0.150821,
+        "loss": 7.373598,
+        "perplexity": 1593.355765
+    },
+    {
+        "file": "20260202_1754_transformer_sub20000.pt",
+        "model": "transformer",
+        "bleu": 0.000502,
+        "rougeL": 0.101907,
+        "loss": 7.99913,
+        "perplexity": 2978.366744
+    },
+    {
+        "file": "20260202_0928_transformer_sub50000.pt",
+        "model": "transformer",
+        "bleu": 0.000513,
+        "rougeL": 0.115914,
+        "loss": 7.981849,
+        "perplexity": 2927.338401
+    },
+    {
+        "file": "20260202_1126_transformer_sub70000.pt",
+        "model": "transformer",
+        "bleu": 0.000935,
+        "rougeL": 0.12184,
+        "loss": 7.908784,
+        "perplexity": 2721.080351
+    }
+]
