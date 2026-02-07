@@ -30,7 +30,6 @@ The code is organized into the following main directories and files:
 - `evaluate.py`: Script dedicated to checkpoint evaluation, calculating metrics such as BLEU and ROUGE, and     managing "Audit Mode".
 - `requierements.txt`: List of requierements needed to run the code
 - `test_audit.py`:
-- `test.py`: Code to run a very quick test on a model of choice
 - `tokenizer.json`: Contains the BPE Tokenizer (general info, vocabulary and merges)
 
 ---
