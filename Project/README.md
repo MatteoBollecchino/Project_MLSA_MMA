@@ -19,7 +19,7 @@ The code is organized into the following main directories and files:
     - `dataset_cleaner.py`: Module for code sanitization (comment removal, MD5 deduplication).
     - `dataset.py`: Handles data loading (DataLoaders).
     - `download_dataset.py`: Downloads the dataset (CodeSearchNet in our case).
-    - `inspect_dataset.py`: Generates human-readable snapshots of compressed for a qaulitative evaluation. 
+    - `inspect_dataset.py`: Generates human-readable snapshots of compressed for a qualitative evaluation. 
     - `tokenizer.py`: Construction and management of the BPE vocabulary.
 - `Datasets/`: Default directory for storing raw and processed dataset.
 - `logs/`: Directory where execution logs and training metrics are saved.
