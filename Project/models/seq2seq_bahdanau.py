@@ -66,7 +66,7 @@ class BahdanauAttention(nn.Module):
 
 class Encoder(nn.Module):
     """
-    FEATURE EXTRACTION UNIT: Consumes the source sequence and builds context.
+    Consumes the source sequence and builds context.
     Uses a multi-layer LSTM to capture hierarchical dependencies in Python code.
     """
 
@@ -106,7 +106,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     """
-    GENERATIVE REFINERY: Predicts the next token in the natural language summary.
+    Predicts the next token in the natural language summary.
     Fuses previous tokens, recurrent memory, and the 'Attention' context.
     """
 
@@ -155,7 +155,7 @@ class Decoder(nn.Module):
 
 class Seq2SeqBahdanau(nn.Module):
     """
-    SCAFFOLD: Integrates Encoder, Attention, and Decoder into a unified pipeline.
+    Integrates Encoder, Attention, and Decoder into a unified pipeline.
     """
 
     def __init__(self, vocab_size, emb_dim, hid_dim, n_layers, dropout, device):
