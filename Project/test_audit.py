@@ -6,8 +6,6 @@ ROLE: High-Fidelity Model Assessment via Beam Search and Suite Testing.
 
 DESIGN RATIONALE:
 - Formal Verification: Generates a persistent audit log for post-mortem analysis.
-- Deterministic Evaluation: Removes visual noise (emojis) to focus on 
-  statistical consistency and sequence quality.
 - Throughput Monitoring: Implements progress tracking for large checkpoint
   batches to monitor hardware efficiency during inference.
 ================================================================================
