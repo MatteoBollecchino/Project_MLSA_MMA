@@ -75,6 +75,8 @@ def save_human_readable_samples(input_dir, output_dir, output_filename, num_exam
                         # SCHEMA NORMALIZATION:
                         # Logic: Handle raw dataset keys (func_...) and refined keys (code/docstring).
                         # Implements a fallback to 'N/A' to avoid key-error crashes.
+
+                        # First attempt to map to the refined schema, then fallback to raw schema keys.
                         code = data.get('code', data.get('func_code_string', 'N/A'))
                         doc = data.get('docstring', data.get('func_documentation_string', 'N/A'))
 

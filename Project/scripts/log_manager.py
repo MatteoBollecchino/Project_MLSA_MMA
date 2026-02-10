@@ -7,7 +7,7 @@ ROLE: Centralized Observability and Performance Tracking.
 DESIGN RATIONALE:
 - Data Integrity: Captures snapshots of the system state before and after runs.
 - Analytics Ready: Exports structured JSON for downstream graphing and audit tools.
-- Post-Mortem Diagnostics: Detailed timing of every pipeline stage (refinery, 
+- Diagnostics: Detailed timing of every pipeline stage (refinery, 
   tokenization, training) to identify computational bottlenecks.
 ================================================================================
 """
@@ -16,7 +16,6 @@ import os
 import torch
 import platform
 import json
-import time
 from datetime import datetime
 
 # --- [LOGGING AND TELEMETRY MANAGER] ---

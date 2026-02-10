@@ -20,14 +20,13 @@ import argparse
 import logging
 import torch
 import time
-import sys
 from datetime import datetime
 from tokenizers import Tokenizer
 
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.11 - Opportunity" 
+PIPELINE_VERSION = "4.4.12 - Opportunity" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
