@@ -14,7 +14,6 @@ DESIGN RATIONALE:
 """
 
 import logging
-import torch
 from models.transformer import Seq2SeqTransformer
 from models.seq2seq_bahdanau import Seq2SeqBahdanau
 from models.seq2seq_dotproduct import Seq2SeqDotProduct

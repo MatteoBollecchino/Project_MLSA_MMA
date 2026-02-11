@@ -98,6 +98,7 @@ def build_tokenizer(processed_data_dir, save_path, vocab_size=VOCAB_SIZE):
             with gzip.open(train_file_path, 'rt', encoding='utf-8') as f:
                 for line in f:
                     try:
+                        # JSON PARSING: Each line is expected to be a JSON object with 'code' and 'docstring' fields (or their variants).
                         data = json.loads(line)
                         
                         # DATA EXTRACTION:

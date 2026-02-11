@@ -26,7 +26,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.12 - Opportunity" 
+PIPELINE_VERSION = "4.4.13 - Opportunity" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
@@ -145,6 +145,8 @@ class CodeSummarizationPipeline:
         logger.info("Phase 2: Sanitizing Source Code & Target Summaries...")
         t1 = time.time()
         expected_files = ["train.jsonl.gz", "valid.jsonl.gz", "test.jsonl.gz"]
+
+        # Check for pre-processed data to skip redundant cleaning steps, saving time on iterative runs.
         is_processed = all(os.path.exists(os.path.join(self.processed_dir, f)) for f in expected_files)
         
         if is_processed and not self.config.force_download:
@@ -181,6 +183,8 @@ class CodeSummarizationPipeline:
 
         # Dataloader Factory: Optimized with dynamic padding to minimize null computations.
         train_loader = get_dataloader(self.processed_dir, "train", self.tokenizer_path, self.config.batch_size, subset=self.config.subset)
+
+        # Subset Control Logic: Allows for rapid iteration during development by limiting the number of samples.
         valid_loader = get_dataloader(self.processed_dir, "valid", self.tokenizer_path, self.config.batch_size, subset=self.config.subset // 5 if self.config.subset else None)
 
         try:

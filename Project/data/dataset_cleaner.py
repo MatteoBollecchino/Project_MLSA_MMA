@@ -60,9 +60,13 @@ class DatasetCleaner:
         if not doc: return ""
         
         # Isolate the primary intent (summary line/paragraph).
+        # Takes the first block of text before any double newline
+        # which often contains detailed descriptions or parameter lists.
         doc = doc.split('\n\n')[0]
         
         # REGEX SHIELD: Remove metadata tags commonly found in automated documentation.
+        # Removes lines starting with :param, :type, :return, @param, @return, Args:, Returns:, Raises: etc. that can be found on multiple lines.
+        # r -> raw string to avoid escaping backslashes, ^ and $ for line anchors, .* for any characters, and re.MULTILINE to apply to each line.
         doc = re.sub(r'(:param|:type|:return|:rtype|@param|@return|@throws|Args:|Returns:|Raises:).*', '', doc, flags=re.MULTILINE)
         
         # Remove doctest snippets (>>> example) to prevent training on test code.
@@ -71,6 +75,7 @@ class DatasetCleaner:
         # Remove URLs to clean up the target vocabulary.
         doc = re.sub(r'http\S+', '', doc)
         
+        # Final cleanup: Collapse multiple spaces and trim.
         return ' '.join(doc.split()).strip()
     
     @staticmethod
@@ -88,6 +93,8 @@ class DatasetCleaner:
 
         # STEP 1: Eliminate triple-quoted docstrings. Non-greedy match ([\s\S]*?).
         docstring_pattern = r'(\"\"\"[\s\S]*?\"\"\"|\'\'\'[\s\S]*?\'\'\')'
+
+        # count=1 ensures only the first docstring is removed, which is typically the function-level docstring.
         code = re.sub(docstring_pattern, '', code, count=1)
 
         # STEP 2: Intelligent Comment removal.
@@ -108,6 +115,7 @@ class DatasetCleaner:
         # STEP 3: Structural cleanup to remove trailing whitespace and null lines.
         lines = [line for line in code.split('\n') if line.strip()]
         
+        # Final compactification: Join lines with a single newline to create a dense code block.
         return "\n".join(lines).strip()
 
     def process_split(self, split_name, input_dir, output_dir, mode="filter"):
@@ -119,7 +127,11 @@ class DatasetCleaner:
                 - 'build': Populates the global hash registry (Use for TRAIN).
                 - 'filter': Tests against the registry to prevent leakage (Use for VALID/TEST).
         """
+
+        # Glob pattern to find all JSONL.GZ files for the given split.
         search_path = os.path.join(input_dir, split_name, "*.jsonl.gz")
+
+        # Captures the files and records processed for each split.
         files = glob.glob(search_path)
         
         if not files:
@@ -136,11 +148,16 @@ class DatasetCleaner:
 
         # Stream directly into GZIP to manage large datasets without memory saturation.
         with gzip.open(output_file, 'wt', encoding='utf-8') as out_f:
+
+            # Process each file in the split sequentially to maintain a clear audit trail and allow for progress tracking.
             for file_path in tqdm(files, desc=f"Sanitizing {split_name}"):
+
+                # Stream the input file line by line to handle large files efficiently.
                 with gzip.open(file_path, 'rt', encoding='utf-8') as f:
                     for line in f:
                         stats["total"] += 1
                         try:
+                            # JSON Parsing: Each line is expected to be a JSON object with 'code' and 'docstring' fields (or their variants).
                             data = json.loads(line)
                             
                             # Normalize key naming across different dataset versions (func_code vs code).
@@ -173,6 +190,8 @@ class DatasetCleaner:
                             # 4. CROSS-SPLIT DEDUPLICATION: MD5 Fingerprinting.
                             # We strip all whitespace to catch formatting-only duplicates.
                             code_norm = re.sub(r'\s+', '', clean_code)
+
+                            # Hashing the normalized code to create a unique fingerprint for deduplication.
                             code_hash = hashlib.md5(code_norm.encode('utf-8')).hexdigest()
                             
                             if code_hash in self.global_seen_hashes:

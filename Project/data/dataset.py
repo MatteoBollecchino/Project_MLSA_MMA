@@ -48,6 +48,7 @@ class SmartCollator:
         1. De-structure the batch into separate code and docstring streams.
         2. Apply 'pad_sequence' to create rectangular tensors [Batch, Max_Batch_Len].
         """
+        # Unzip the batch into separate lists of code and docstring tensors.
         code_seqs, doc_seqs = zip(*batch)
 
         # [OPTIMIZATION] Dynamic Padding Logic:
@@ -97,7 +98,9 @@ class CodeSummaryDataset(Dataset):
         with gzip.open(file_path, 'rt', encoding='utf-8') as f:
             for line in f:
                 try:
+                    # JSON Parsing: Each line is a JSON object with 'code' and 'docstring' fields.
                     item = json.loads(line)
+                    
                     code = item.get('code', '')
                     doc = item.get('docstring', '')
                     
