@@ -121,6 +121,7 @@ class CodeSummaryDataset(Dataset):
                     # Persist the tensor pair in RAM for the duration of the training session.
                     self.data.append((code_tensor, doc_tensor))
                     
+                    # If a subset size is specified, stop loading after reaching that number of samples.
                     if subset and len(self.data) >= subset: 
                         break
                         
