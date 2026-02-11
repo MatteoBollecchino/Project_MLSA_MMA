@@ -67,7 +67,9 @@ class BatchEvaluator:
             # For Transformer-based models, we can directly work with the source input and do not need to manage hidden states.
             beams = [([sos_id], 0.0)]
 
-            # Transformer encoders typically produce a fixed representation of the source sequence, which is used during decoding. We can pre-compute this representation once and reuse it across all beam candidates.
+            # Transformer encoders typically produce a fixed representation of the source sequence, 
+            # which is used during decoding. We can pre-compute this representation once and reuse 
+            # it across all beam candidates.
             encoder_outputs = None
 
         # Iteratively expand beams until we reach the maximum length or all beams end with the EOS token.
