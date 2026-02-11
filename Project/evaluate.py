@@ -52,20 +52,29 @@ class BatchEvaluator:
 
     def beam_decode(self, model, src, model_tag, beam_width=3, max_len=30):
         """ Heuristic search for the most likely sequence. """
-        
+
         # Initialize special token IDs for start and end of sequence.
         sos_id = self.tokenizer.token_to_id("<SOS>")
         eos_id = self.tokenizer.token_to_id("<EOS>")
         
         if "lstm" in model_tag:
+            # For LSTM-based models, we need to capture the encoder's hidden states for attention mechanisms.
             encoder_outputs, hidden, cell = model.encoder(src)
+
+            # Initialize beams with the start token and initial hidden states.
             beams = [([sos_id], 0.0, hidden, cell)]
         else:
+            # For Transformer-based models, we can directly work with the source input and do not need to manage hidden states.
             beams = [([sos_id], 0.0)]
+
+            # Transformer encoders typically produce a fixed representation of the source sequence, which is used during decoding. We can pre-compute this representation once and reuse it across all beam candidates.
             encoder_outputs = None
 
+        # Iteratively expand beams until we reach the maximum length or all beams end with the EOS token.
         for step in range(max_len):
             new_candidates = []
+
+            # For each beam, we generate the next token probabilities and create new candidate beams.
             for b in beams:
                 if "lstm" in model_tag:
                     seq, score, h, c = b
@@ -77,17 +86,25 @@ class BatchEvaluator:
                     continue
                 
                 try:
+                    # Generate the next token probabilities using the model's decoder.
                     if "lstm" in model_tag:
+                        # For LSTM-based models, we need to feed the last generated token along with the current hidden states to get the next output and updated hidden states.
                         input_token = torch.LongTensor([seq[-1]]).to(self.device)
                         output, next_h, next_c = model.decoder(input_token, h, c, encoder_outputs)
                     else:
+                        # For Transformer-based models, we can directly feed the entire sequence generated so far to get the next token probabilities.
                         input_tensor = torch.LongTensor([seq]).to(self.device)
                         output = model(src, input_tensor)[:, -1, :]
                     
+                    # Convert output to log probabilities for numerical stability and get the top-k candidates.
                     log_probs = F.log_softmax(output, dim=-1)
+
+                    # Get the top-k token probabilities and their corresponding token IDs.
                     top_v, top_i = log_probs.topk(beam_width)
                     
+                    # Create new candidate beams by appending each of the top-k tokens to the current sequence and updating the cumulative score.
                     for i in range(beam_width):
+                        # The new score is the sum of the current beam's score and the log probability of the next token, which allows us to maintain a cumulative score that reflects the overall likelihood of the sequence.
                         next_token = top_i[0, i].item()
                         new_score = score + top_v[0, i].item()
                         
@@ -99,10 +116,14 @@ class BatchEvaluator:
                     logger.error(f"Search Failure at step {step}: {e}")
                     raise e
             
+            # After generating candidates for all beams, we sort them by their cumulative score and keep only the top-k beams for the next iteration. This pruning step is crucial to manage the search space and focus on the most promising sequences.
             beams = sorted(new_candidates, key=lambda x: x[1], reverse=True)[:beam_width]
+
+            # If all beams have generated the EOS token, we can stop the search early as we have completed valid sequences.
             if all(b[0][-1] == eos_id for b in beams):
                 break
-                
+
+        # The best sequence is the one with the highest cumulative score among the final beams. We return this sequence, excluding the start token and any tokens after the end token.   
         return beams[0][0]
 
     def evaluate_single_checkpoint(self, checkpoint_name):
