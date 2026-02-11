@@ -26,7 +26,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.13 - Opportunity" 
+PIPELINE_VERSION = "4.4.14 - Opportunity" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
@@ -196,6 +196,7 @@ class CodeSummarizationPipeline:
             train_model(model, train_loader, valid_loader, self.config, self.device, telemetry=telemetry)
             
             # Persist optimized weights to disk.
+            # Saves checkpoints with metadata tags for easy retrieval during audits.
             os.makedirs(self.checkpoint_dir, exist_ok=True)
             torch.save(model.state_dict(), model_save_path)
             logger.info(f"Checkpoint saved: {filename}")

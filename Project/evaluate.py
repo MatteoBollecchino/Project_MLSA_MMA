@@ -52,6 +52,8 @@ class BatchEvaluator:
 
     def beam_decode(self, model, src, model_tag, beam_width=3, max_len=30):
         """ Heuristic search for the most likely sequence. """
+        
+        # Initialize special token IDs for start and end of sequence.
         sos_id = self.tokenizer.token_to_id("<SOS>")
         eos_id = self.tokenizer.token_to_id("<EOS>")
         
