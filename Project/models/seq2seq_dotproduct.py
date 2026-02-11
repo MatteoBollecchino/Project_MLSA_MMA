@@ -37,6 +37,7 @@ class DotProductAttention(nn.Module):
             hid_dim (int): Dimension of the Query/Key vectors.
         """
         super().__init__()
+
         # Linear Projections: Mapping raw hidden states into the specialized 
         # Attention Space (Standard practice in modern Transformer-style attention).
         self.w_q = nn.Linear(hid_dim, hid_dim) #(H,H)
@@ -53,26 +54,28 @@ class DotProductAttention(nn.Module):
             keys: All Encoder outputs [batch, src_len, hid_dim].
         """
 
-        #query:(B,H)
-        #keys:(B,L,H)
+        # query: [batch, hid_dim]
+        # keys: [batch, src_len, hid_dim]
 
         # Step 1: Project raw states into the matching Attention Space.
         # q: [batch, 1, hid_dim] | k: [batch, hid_dim, src_len] (transposed for dot product)
-        q = self.w_q(query).unsqueeze(1) #(B,H)->(B,1,H)
-        k = self.w_k(keys).transpose(1, 2) #(B,L,H)->(B,H,L)
+        q = self.w_q(query).unsqueeze(1) # [batch, hid_dim] -> [batch, 1, hid_dim]
+        k = self.w_k(keys).transpose(1, 2) # [batch, src_len, hid_dim] -> [batch, hid_dim, src_len]
         
         # Step 2: Scaled Dot Product calculation (BMM = Batch Matrix Multiplication).
         # scores = (Q * K^T) / sqrt(d)
-        scores = torch.bmm(q, k) / self.scale #(B,1,L)
+        scores = torch.bmm(q, k) / self.scale # [batch, 1, src_len]
         
         # Step 3: Compute Attention Weights (alphas).
         # Softmax over the source sequence length.
-        alphas = F.softmax(scores, dim=-1)
+        alphas = F.softmax(scores, dim=-1) # [batch, 1, src_len]
         
         # Step 4: Construct the Context Vector.
         # Sum of Encoder outputs weighted by their relevance to the current Query.
         context = torch.bmm(alphas, keys) # [batch, 1, hid_dim]
         
+        # Squeeze the singleton dimension for compatibility with the Decoder's expected input shape.
+        # alphas: [batch, src_len], context: [batch, 1, hid_dim]
         return alphas.squeeze(1), context
 
 class DecoderDot(nn.Module):
@@ -97,6 +100,10 @@ class DecoderDot(nn.Module):
         """
         Single-step autoregressive forward pass.
         """
+        # hidden: [n_layers, batch, hid_dim]
+        # cell: [n_layers, batch, hid_dim]
+        # encoder_outputs: [batch, src_len, hid_dim]
+
         # input: [batch] -> embedded: [batch, 1, emb_dim]
         input = input.unsqueeze(1)
         embedded = self.dropout(self.embedding(input))
@@ -106,6 +113,7 @@ class DecoderDot(nn.Module):
         _, context = self.attention(hidden[-1], encoder_outputs)
         
         # FUSION: Concatenating the semantic token with the spatial code context.
+        # rnn_input: [batch, 1, emb_dim + hid_dim]
         rnn_input = torch.cat((embedded, context), dim=2)
         
         # RECURRENCE: Update the LSTM's internal state (memory).
@@ -114,6 +122,8 @@ class DecoderDot(nn.Module):
         # LOGIT PREDICTION: Map the updated memory to the target language space.
         prediction = self.fc_out(output)
         
+        # prediction: [batch, 1, output_dim] -> squeeze to [batch, output_dim]
+        # hidden, cell: [n_layers, batch, hid_dim] (passed back for the next time step)
         return prediction.squeeze(1), hidden, cell
 
 class Seq2SeqDotProduct(nn.Module):
@@ -131,7 +141,10 @@ class Seq2SeqDotProduct(nn.Module):
         """
         Full Sequence Forward Pass.
         """
+        # src: [batch, src_len], trg: [batch, trg_len]
         batch_size, trg_len = trg.shape[0], trg.shape[1]
+
+        # Placeholder for decoder outputs: [batch, trg_len, output_dim]
         outputs = torch.zeros(batch_size, trg_len, self.output_dim).to(self.device)
         
         # 1. Encode source code into context vectors.
@@ -147,4 +160,5 @@ class Seq2SeqDotProduct(nn.Module):
             teacher_force = random.random() < teacher_forcing_ratio
             input = trg[:, t] if teacher_force else output.argmax(1)
             
+        # outputs: [batch, trg_len, output_dim] - ready for loss calculation against trg.
         return outputs

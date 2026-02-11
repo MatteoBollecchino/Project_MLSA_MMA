@@ -52,6 +52,7 @@ class BahdanauAttention(nn.Module):
         src_len = encoder_outputs.shape[1]
 
         # Expand Decoder hidden state to match Encoder sequence length.
+        # hidden: [batch, hid_dim] -> [batch, src_len, hid_dim] by repeating across the sequence length.
         hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
 
         # ENERGY CALCULATION: 
@@ -59,6 +60,7 @@ class BahdanauAttention(nn.Module):
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
 
         # Reduce to scalar energy and remove the last dimension.
+        # attention: [batch, src_len, 1] -> [batch, src_len]
         attention = self.v(energy).squeeze(2)
 
         # SOFTMAX: Normalize energy into probabilities (sum to 1) across the sequence length.
@@ -82,6 +84,7 @@ class Encoder(nn.Module):
         super().__init__()
 
         # Semantic projection layer.
+        # Maps discrete token IDs to continuous vectors that capture semantic relationships.
         self.embedding = nn.Embedding(input_dim, emb_dim)
 
         # RECURRENT BACKBONE: Processes the sequence step-by-step.
@@ -97,9 +100,12 @@ class Encoder(nn.Module):
             outputs: All hidden states [batch, seq_len, hid_dim].
             hidden/cell: Final state tensors [n_layers, batch, hid_dim].
         """
+        # EMBEDDING: Convert token IDs to dense vectors.
+        # src: [batch, seq_len] -> embedded: [batch, seq_len, emb_dim]
         embedded = self.dropout(self.embedding(src))
 
         # LSTM processing: outputs contains the features for EACH token.
+        # hidden and cell contain the final states after processing the entire sequence.
         outputs, (hidden, cell) = self.rnn(embedded)
 
         return outputs, hidden, cell
@@ -130,8 +136,15 @@ class Decoder(nn.Module):
         """
         Single-step decoding logic.
         """
+        # hidden: [n_layers, batch, hid_dim] -> take the top layer's hidden state for attention.
+        # cell is not used in attention but is passed through the RNN for state updates.
+        # encoder_outputs: [batch, src_len, hid_dim]
+
         # input: [batch] -> reshape to [batch, 1] for sequential processing.
         input = input.unsqueeze(1)
+
+        # EMBEDDING: Convert the current input token to its vector representation.
+        # embedded: [batch, 1, emb_dim]
         embedded = self.dropout(self.embedding(input))
 
         # ATTENTION STEP: Find relevance of source tokens relative to current hidden state.
@@ -146,9 +159,11 @@ class Decoder(nn.Module):
         rnn_input = torch.cat((embedded, weighted), dim=2)
 
         # RECURRENCE: Update internal memory.
+        # rnn_input: [batch, 1, emb_dim + hid_dim] -> output: [batch, 1, hid_dim]
         output, (hidden, cell) = self.rnn(rnn_input, (hidden, cell))
 
         # OUTPUT LOGITS: Final prediction based on current, contextual, and recurrent information.
+        # prediction: [batch, 1, output_dim] -> squeeze to [batch, output_dim]
         prediction = self.fc_out(torch.cat((output, weighted, embedded), dim=2))
 
         return prediction.squeeze(1), hidden, cell
@@ -174,6 +189,8 @@ class Seq2SeqBahdanau(nn.Module):
         2. Iterate over target length (Docstring).
         3. Use 'Teacher Forcing' to stabilize early training stages.
         """
+
+        # Initialize a tensor to hold the decoder's outputs for the entire target sequence.
         batch_size, trg_len = trg.shape[0], trg.shape[1]
         outputs = torch.zeros(batch_size, trg_len, self.output_dim).to(self.device)
 
@@ -192,4 +209,5 @@ class Seq2SeqBahdanau(nn.Module):
             teacher_force = random.random() < teacher_forcing_ratio
             input = trg[:, t] if teacher_force else output.argmax(1)
 
+        # outputs: [batch, trg_len, output_dim] - ready for loss calculation against trg.
         return outputs

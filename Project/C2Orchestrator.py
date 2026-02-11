@@ -26,7 +26,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.16 - Opportunity" 
+PIPELINE_VERSION = "4.4.17 - Opportunity" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
@@ -252,7 +252,7 @@ class CodeSummarizationPipeline:
 
                 # Validates indices and constructs the list of target checkpoints for evaluation.
                 targets = [all_ckpts[i] for i in indices if 0 <= i < len(all_ckpts)]
-                
+
             except Exception as e:
                 logger.error(f"Invalid index format: {e}")
                 return
