@@ -130,6 +130,7 @@ class BatchEvaluator:
 
     def evaluate_single_checkpoint(self, checkpoint_name):
         """ Performs full metric audit: BLEU, ROUGE, Loss, and Perplexity. """
+
         if "transformer" in checkpoint_name.lower(): model_tag = "transformer"
         elif "lstm_dotproduct" in checkpoint_name.lower(): model_tag = "lstm_dotproduct"
         else: model_tag = "lstm_bahdanau"
@@ -139,17 +140,28 @@ class BatchEvaluator:
         
         try:
             model = get_model_architecture(model_tag, self.device, vocab_size=self.vocab_size)
+
+            # Load the checkpoint weights into the model.
+            # 'weights_only=True' -> to ensure that we are only loading the model parameters
             state_dict = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
+
+            # We set the model to evaluation mode to disable dropout and other training-specific behaviors, 
+            # ensuring that we get consistent and deterministic outputs during the evaluation phase.
             model.load_state_dict(state_dict)
+
             model.eval()
         except Exception as e:
             return {"file": checkpoint_name, "error": str(e)}
         
+        # 'batch_size=1' -> to evaluate one sample at a time
+        # The 'subset' parameter is used to limit the number of samples we evaluate
         test_loader = get_dataloader(self.data_path, "test", self.tokenizer_path, batch_size=1, subset=self.subset_size)
         references, hypotheses = [], []
         total_loss = 0
         total_tokens = 0
 
+        # We use 'torch.no_grad()' to disable gradient calculations during the evaluation phase, 
+        # which reduces memory consumption and speeds up computations since we are not performing backpropagation.
         with torch.no_grad():
             for src, trg in tqdm(test_loader, desc=f"Audit {model_tag}", leave=False):
                 src, trg = src.to(self.device), trg.to(self.device)
@@ -159,26 +171,37 @@ class BatchEvaluator:
                 if "lstm" in model_tag:
                     output = model(src, trg[:, :-1]) # Standard teacher forcing pass
                 else:
-                    output = model(src, trg[:, :-1])
+                    output = model(src, trg[:, :-1]) # Standard teacher forcing pass
                 
                 # Reshape for CrossEntropy: [Batch * Seq, Vocab]
                 output_dim = output.shape[-1]
+
+                # We flatten the output and target tensors to compute the loss across all tokens in the batch.
                 output = output.contiguous().view(-1, output_dim)
+
+                # The target for loss calculation is the next token in the sequence, which is why we use 'trg[:, 1:]'.
                 trg_loss = trg[:, 1:].contiguous().view(-1)
                 
                 # output shape: [Batch * Seq, Vocab_Size]
                 # trg_loss shape: [Batch * Seq]
                 
+                # We compute the cross-entropy loss, which measures the difference between the predicted token probabilities and the actual next tokens in the sequence. 
+                # 'reduction="sum"' -> allows us to get the total loss across all tokens.
                 loss = F.cross_entropy(output, trg_loss, reduction='sum')
+
                 total_loss += loss.item()
                 total_tokens += trg_loss.numel()
 
-
                 # --- QUALITATIVE ANALYSIS (Decoding) ---
+                # We use beam search decoding to generate the predicted sequence for each input. This allows us to explore multiple candidate sequences and select the one with the highest cumulative probability, which typically results in better performance on metrics like BLEU and ROUGE compared to greedy decoding.
                 predicted_indices = self.beam_decode(model, src, model_tag, beam_width=3)
+
+                # We decode the predicted indices into human-readable text using the tokenizer. 
+                # 'skip_special_tokens=True' -> ensures that special tokens like <pad>, <sos>, and <eos> are removed from the decoded text.
                 pred_text = self.tokenizer.decode(predicted_indices, skip_special_tokens=True).strip()
                 real_text = self.tokenizer.decode(trg.squeeze().tolist(), skip_special_tokens=True).strip()
                 
+                # We append the predicted and reference texts to their respective lists for later use in metric calculations. 
                 hypotheses.append(pred_text.split())
                 references.append([real_text.split()])
 
@@ -186,7 +209,12 @@ class BatchEvaluator:
         # 1. Linguistic Metrics
         bleu = corpus_bleu(references, hypotheses, smoothing_function=SmoothingFunction().method1)
         scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
+
+        # We calculate the ROUGE-L score for each pair of reference and hypothesis, summing the F-measure scores and then averaging them across all samples to get the final ROUGE-L score for the checkpoint.
         total_rouge = sum(scorer.score(" ".join(r[0]), " ".join(h))['rougeL'].fmeasure for h, r in zip(hypotheses, references))
+        
+        # Average ROUGE-L score by dividing the total ROUGE-L score by the number of samples (hypotheses). 
+        # This gives us a single ROUGE-L score that represents the overall performance of the model on the test set.
         rougeL = total_rouge / len(hypotheses) if hypotheses else 0
         
         # 2. Probabilistic Metrics
@@ -203,6 +231,9 @@ class BatchEvaluator:
         }
 
     def run_all(self, specific_file=None):
+        # If a specific checkpoint file is provided, we evaluate only that file. 
+        # Otherwise, we evaluate all checkpoint files in the directory. 
+        # This allows for both targeted audits and comprehensive batch evaluations.
         files = [specific_file] if specific_file else [f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")]
         if not files: return None
 

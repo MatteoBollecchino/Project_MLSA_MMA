@@ -144,7 +144,10 @@ class ExecutionLogger:
         
         # Slug format: TIMESTAMP_ARCH_SUBSET_METRIC
         full_ts = self.start_time.strftime('%Y%m%d_%H%M%S')
+
+        # We take the first 5 characters of the model tag (in uppercase) to create a concise identifier for the model architecture used in this run.
         model_short = self.model_tag.upper()[:5]
+        
         subset_tag = f"S{self.subset_size}"
         
         final_name = f"{full_ts}_{model_short}_{subset_tag}_{bleu_tag}"

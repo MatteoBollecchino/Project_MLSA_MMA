@@ -26,7 +26,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.14 - Opportunity" 
+PIPELINE_VERSION = "4.4.15 - Opportunity" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
@@ -235,6 +235,7 @@ class CodeSummarizationPipeline:
             return
 
         # Retrieve and sort available .pt weights chronologically.
+        # reverse=True ensures that the most recent checkpoints are evaluated first.
         all_ckpts = sorted([f for f in os.listdir(self.checkpoint_dir) if f.endswith(".pt")], reverse=True)
         if not all_ckpts:
             logger.error("No checkpoints available for evaluation.")
@@ -246,8 +247,12 @@ class CodeSummarizationPipeline:
             targets = all_ckpts
         else:
             try:
+                # Parses user input to select specific checkpoints based on their index in the sorted list.
                 indices = [int(i.strip()) - 1 for i in self.config.neval.split(",")]
+
+                # Validates indices and constructs the list of target checkpoints for evaluation.
                 targets = [all_ckpts[i] for i in indices if 0 <= i < len(all_ckpts)]
+                
             except Exception as e:
                 logger.error(f"Invalid index format: {e}")
                 return
