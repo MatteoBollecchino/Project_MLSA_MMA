@@ -121,7 +121,7 @@ class Decoder(nn.Module):
         self.rnn = nn.LSTM(emb_dim + hid_dim, hid_dim, n_layers, dropout=dropout, batch_first=True)
 
         # FINAL PROJECTION: Maps concatenated features to the vocabulary space.
-        # hid_dim * 2 comes from (RNN output + Weighted Context).
+        # hid_dim * 2 comes from (RNN output (h) + Weighted Context).
         self.fc_out = nn.Linear(emb_dim + hid_dim * 2, output_dim)
 
         self.dropout = nn.Dropout(dropout)

@@ -167,9 +167,9 @@ class ExecutionLogger:
             with open(final_path_json, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, indent=4)
                 
-            print(f"✅ Log Saved: {os.path.basename(final_path_log)}")
+            print(f"Log Saved: {os.path.basename(final_path_log)}")
         except Exception as e:
-            print(f"⚠️ Critical error during log archiving: {e}")
+            print(f"Critical error during log archiving: {e}")
 
     def _write_to_file(self, text):
         """ Low-level I/O method to commit text to the physical storage device. """

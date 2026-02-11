@@ -1,6 +1,6 @@
 ================================================================================
 Code Snapshot for Project: Project
-Generated on: 2026-02-04 11:17:45
+Generated on: 2026-02-07 11:45:39
 ================================================================================
 
 --- FILE: C2Orchestrator.py | PATH: Project\C2Orchestrator.py ---
@@ -35,7 +35,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.6-Origin" 
+PIPELINE_VERSION = "4.4.7 - Opportunity" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
@@ -305,76 +305,126 @@ if __name__ == "__main__":
 --- FILE: README.md | PATH: Project\README.md ---
 -------------------------------------------------
 
-# Project Core
+# Project Description
 
-This directory contains the core source code for the Code Summarization project.
+The C2 Master Orchestrator is a modular neural pipeline designed for Code Summarization (automatic analysis and summarization of source code). The system aims to transform raw Python code into concise natural language descriptions, optimizing the signal-to-noise ratio through a series of data refinement stages and model training.
+
+The system follows the "Factory" design pattern to decouple architecture selection from the training loop and implements a strict separation between data ingestion, cleaning, and training.
+
+## Authors
+
+Marco Pietri, Alessandro Nesti, Matteo Bollecchino
+
+---
 
 ## Project Structure
+The code is organized into the following main directories and files:
 
-- `data/`: Scripts for data downloading, preprocessing, and loading (`dataset.py`, `download_dataset.py`, `preprocess.py`).
-- `models/`: Contains the implementation of the neural network models, such as `transformer.py` and `seq2seq.py`.
-- `scripts/`: Main scripts to execute training (`train.py`) and other utilities.
-- `C2Orchestrator.py`: The main orchestrator script to run training and evaluation tasks.
-- `evaluate.py`: Script to evaluate a trained model.
-- `requirements.txt`: A list of the Python dependencies for the project.
-- `logs/`: Contains log files from training runs.
-- `Datasets/`: Default directory where the datasets are stored.
+- `C2Orchestrator.py`: The "Central Management Unit" (CMU). It is the main script that orchestrates the entire machine learning lifecycle, managing both training and evaluation.
 
-## How to Run
+- `data/`: Contains scripts for dataset management:
+    - `dataset_cleaner.py`: Module for code sanitization (comment removal, MD5 deduplication).
+    - `dataset.py`: Handles data loading (DataLoaders).
+    - `download_dataset.py`: Downloads the dataset (CodeSearchNet in our case).
+    - `inspect_dataset.py`: Generates human-readable snapshots of compressed for a qaulitative evaluation. 
+    - `tokenizer.py`: Construction and management of the BPE vocabulary.
+- `Datasets/`: Default directory for storing raw and processed dataset.
+- `logs/`: Directory where execution logs and training metrics are saved.
+- `models/`: Contains neural architecture definitions (e.g., Transformer, LSTM).
+- `scripts/`: Utility scripts and training logic (`train.py`, `log_manager.py`, `log_parser.py`, `compare_models.py`).
+
+- `colab_remote_exec.txt`: Script to be executed in Colab environment to train and evaluate a model
+- `evaluate.py`: Script dedicated to checkpoint evaluation, calculating metrics such as BLEU and ROUGE, and     managing "Audit Mode".
+- `requierements.txt`: List of requierements needed to run the code
+- `test_audit.py`:
+- `test.py`: Code to run a very quick test on a model of choice
+- `tokenizer.json`: Contains the BPE Tokenizer (general info, vocabulary and merges)
+
+---
+
+## Usage Guide
 
 ### Prerequisites
 
-1.  Make sure you are in this (`Project`) directory.
+1.  Ensure you are in the root directory of the project (`Project`).
 2.  Install the required dependencies:
     ```sh
     pip install -r requirements.txt
     ```
 
 ### Training Commands
+To start training a new model, use the `C2Orchestrator.py` script with the `--mode train` flag (default). It is mandatory to specify the model architecture using `--model`.
 
-**Transformer Model:**
-To train the Transformer model with a subset of 50,000 samples for 10 epochs and a batch size of 128, run:
-```sh
-python C2Orchestrator.py --model transformer --subset 50000 --epochs 10 --batch_size 128 --force_train
+**Example 1: Transformer Training**
+Trains a Transformer model on a subset of 50,000 samples for 10 epochs:
+```bash
+python C2Orchestrator.py --mode train --model transformer --subset 50000 --epochs 10 --batch_size 128 --force_train
+
 ```
 
-**LSTM with Attention Model:**
-To train the LSTM with Attention model with a subset of 50,000 samples for 5 epochs and a batch size of 64, run:
-```sh
-python C2Orchestrator.py --model lstm_attention --subset 50000 --epochs 5 --batch_size 64
+**Example 2: LSTM Training (Bahdanau Attention)**
+Trains an LSTM model with additive attention:
+
+```bash
+python C2Orchestrator.py --mode train --model lstm_bahdanau --subset 50000 --epochs 10 --batch_size 64
+
 ```
+
+### Evaluation
+
+To evaluate saved models (checkpoints), use the `--mode eval` mode. The system will look for `.pt` files in the checkpoints folder.
+
+**Example: Audit of the last saved model**
+
+```bash
+python C2Orchestrator.py --mode eval --neval 1 --evaluation fast
+
+```
+
+**Example: Audit of all available checkpoints**
+
+```bash
+python C2Orchestrator.py --mode eval --neval all
+
+```
+
+---
 
 ## Command-line Arguments
 
 The `C2Orchestrator.py` script accepts several arguments to control its behavior:
 
 ### Main Modes
--   `--mode`: Choose the operational mode.
-    -   `train` (default): Train a new model.
-    -   `eval`: Audit and evaluate existing checkpoints.
--   `--model`: (Required for `train` mode) Specifies the model architecture.
-    -   `transformer`: Use the Transformer model.
-    -   `lstm_attention`: Use the LSTM with Attention model.
+- `--mode`: Choose the operational mode.
+    - `train` (default): Train a new model.
+    - `eval`: Audit and evaluate existing checkpoints.
+- `--model`: (Required for `train` mode) Specifies the model architecture.
+    - `transformer`: Use the Transformer model.
+    - `lstm_bahdanau`: Use the Encoder-Decoder LSTM with Bahdanau Attention model.
+    - `lstm_dotproduct`: Use the Encoder-Decoder LSTM with Dot-Product Attention model.
 
 ### Training Parameters
--   `--subset`: Specifies the number of samples from the dataset to use for training. (e.g., `50000`). If not provided, the entire dataset is used.
--   `--epochs`: The number of complete passes through the training dataset. (default: `10`).
--   `--batch_size`: The number of samples per batch to load. (default: `128`).
+- `--subset`: Specifies the number of samples from the dataset to use for training. (e.g., `50000`). If not provided, the entire dataset is used.
+- `--epochs`: The number of complete passes through the training dataset. (default: `10`).
+- `--batch_size`: The number of samples per batch to load. (default: `128`).
 
 ### Evaluation Parameters
--   `--neval`: (For `eval` mode) Specifies which saved models to evaluate.
-    -   `1` (default): Evaluates the most recent model.
-    -   `all`: Evaluates all models found in the checkpoints directory.
-    -   `1,2,4`: Evaluates specific models by their index in a reverse-chronological list.
--   `--evaluation`: Determines the number of samples to use for the evaluation process.
-    -   `instant`: 100 samples.
-    -   `fast` (default): 200 samples.
-    -   `deep`: 1000 samples.
+- `--neval`: (For `eval` mode) Specifies which saved models to evaluate.
+    - `1` (default): Evaluates the most recent model.
+    - `all`: Evaluates all models found in the checkpoints directory.
+    - `1,2,4`: Evaluates specific models by their index in a reverse-chronological list.
+- `--evaluation`: Determines the number of samples to use for the evaluation process.
+    - `instant`: 100 samples.
+    - `fast` (default): 200 samples.
+    - `deep`: 1000 samples.
 
 ### Infrastructure Flags
--   `--force_download`: A flag that, when present, forces the re-download of the dataset even if it already exists.
--   `--force_preprocess`: A flag that forces the re-creation of the tokenizer vocabulary.
+- `--force_download`: A flag that, when present, forces the re-download of the dataset even if it already exists.
+- `--force_preprocess`: A flag that forces the re-creation of the tokenizer vocabulary.
+- `--force_train`: Overwrites existing sessions.
 
+
+---
 
 ================================================================================
 
@@ -440,86 +490,6 @@ print("\n--- [FASE 4] AVVIO ADDESTRAMENTO PESANTE ---")
 #!python C2Orchestrator.py --mode train --model lstm_dotproduct --subset 50000 --epochs 10 --batch_size 64 --evaluation fast
 
 print("\n--- PIPELINE COMPLETATA CON SUCCESSO ---")
-
-================================================================================
-
---- FILE: configs.txt | PATH: Project\configs.txt ---
------------------------------------------------------
-
-# Specifiche Tecniche: ML-Based Python Code Summarization
-
-metadata:
-  data: 13 Febbraio 2026
-  deadline: 
-    code_report: 13 Febbraio 2026
-    discussione: 20 Febbraio 2026
-  corso: Machine Learning for Software Analysis
-
-obiettivo_core:
-  descrizione: Sviluppare un tool basato su PyTorch che esegua la "code summarization".
-  input: Codice sorgente Python (es. funzioni, metodi).
-  output: Descrizione testuale (docstring/summary).
-
-vincoli_tecnici:
-  non_permesso:
-    - Utilizzo di Full Language Models pre-addestrati (es. BERT, GPT-2, CodeBERT, T5 caricati con pesi pre-esistenti).
-    - Utilizzo di modelli già addestrati specificamente su sintassi o semantica Python.
-    - Il modello core deve essere addestrato da zero (from scratch) sui dati scelti.
-  permesso:
-    - Utilizzo di Tokenizer pre-addestrati (es. Byte-Pair Encoding, WordPiece).
-    - Utilizzo di Matrici di Embedding pre-addestrate (es. GloVe, Word2Vec), purché non siano parte di un modello Transformer intero.
-    - Utilizzo di LLM (ChatGPT, Claude) per assistenza alla scrittura del codice o debugging (da documentare esplicitamente nel report).
-    - Adattamento di codice open-source (con attribuzione).
-
-architettura_richiesta:
-  framework: PyTorch
-  tipologia: Sequence-to-Sequence (Encoder-Decoder) o Transformer-based (Custom).
-  componenti:
-    - preprocessing: Tokenizzazione codice sorgente e riassunti.
-    - encoder: Processa la sequenza di codice.
-    - decoder: Genera la sequenza di testo (riassunto).
-    - training_loop: Implementazione standard (Forward pass, Loss calculation, Backward pass, Optimizer step).
-
-dati:
-  fonte: Dataset pubblici contenenti coppie (codice python, docstring/riassunto).
-  suggerimento: CodeSearchNet (o subset filtrati da GitHub/StackOverflow).
-  requisito: Il dataset deve essere sufficientemente ampio per permettere la convergenza del training, ma gestibile entro i tempi di calcolo disponibili.
-
-deliverables:
-  codebase:
-    linguaggio: Python/PyTorch
-    struttura_raccomandata:
-      - src/: Codice sorgente.
-      - data/: Script per il download/processing dati.
-      - models/: Definizioni delle classi PyTorch (Encoder, Decoder, Seq2Seq).
-      - scripts/: Script eseguibili.
-    scripts_funzionali:
-      - training: python train.py
-      - evaluation: python evaluate.py
-      - inference: python summarize.py --input "def func(): ..."
-  report:
-    formato: PDF, 5-6 Pagine
-    sezioni:
-      - Introduzione e Obiettivi.
-      - Metodologia: Descrizione dataset, preprocessing, architettura modello (giustificazione scelte).
-      - Risultati: Grafici loss (train/val), tabelle metriche.
-      - Discussione: Analisi errori, limitazioni.
-      - Appendice: Contributi membri gruppo, Riferimenti (incluso uso LLM).
-  readme:
-    contenuto: Istruzioni chiare per installare dipendenze, preparare dati e avviare training, valutazione, inferenza.
-
-metriche_valutazione:
-  - Cross-Entropy Loss (Durante il training/validation).
-  - BLEU Score (Metrica standard per traduzione automatica/generazione testo).
-  - ROUGE Score (Metrica per la qualità del riassunto).
-  - Perplexity (Opzionale ma raccomandata per modelli linguistici).
-
-roadmap_operativa:
-  - Day 1 (Oggi): Setup ambiente, scelta dataset (es. CodeSearchNet slice), pipeline di preprocessing funzionante (Text -> Tokens -> IDs).
-  - Day 2: Implementazione modello Seq2Seq semplice (LSTM o Transformer base). Primo run di training "dummy" per verificare che non crashi.
-  - Day 3: Training serio (overnight se necessario). Implementazione script di valutazione (BLEU/ROUGE).
-  - Day 4: Scrittura Report, cleanup codice, creazione README.
-
 
 ================================================================================
 
@@ -1503,128 +1473,6 @@ def download_codesearchnet_robust(output_dir="Project/Datasets"):
 # STANDALONE EXECUTION LOGIC
 if __name__ == "__main__":
     download_codesearchnet_robust()
-
-================================================================================
-
---- FILE: inspect_corpus.py | PATH: Project\data\inspect_corpus.py ---
-----------------------------------------------------------------------
-
-"""
-================================================================================
-CORPUS INSPECTION TOOL - Debug Utility
-================================================================================
-ROLE: Visual Validation of Data Cleaning and Extraction Logic.
-
-DESIGN RATIONALE:
-- Transparency: Provides a real-time console preview of the 'purified' output 
-  that would otherwise be hidden inside temporary text files or BPE tokens.
-- Heuristic Testing: Allows the developer to verify if the length filters 
-  (e.g., code < 200 words) are correctly excluding structural noise.
-- Logic Decoupling: Replicates the production cleaning functions in a safe, 
-  read-only environment.
-================================================================================
-"""
-
-import os
-import json
-import gzip
-import glob
-import re
-
-# NON-FUNCTIONAL FILE: Used exclusively for debugging and structural inspection.
-
-# --- CONFIGURATION ---
-# Define the root directory for raw JSONL data across various languages.
-JSONL_BASE_DIR = "Project/Datasets/python/final/jsonl" 
-NUM_SAMPLES = 5  # Control parameter for inspection depth.
-
-# --- DATA PURIFICATION LOGIC (Replicated from Production) ---
-def clean_docstring(doc):
-    """ 
-    CLEANING LAYER: Strips structural noise and metadata from docstrings. 
-    
-    Technical Details:
-    - Slicing: Targets only the first functional paragraph to avoid bloating.
-    - Regex Filtering: Removes common documentation tags (:param, @return) 
-      which are statistically redundant for summarization tasks.
-    - Doctest Purge: Removes lines starting with '>>>' to prevent training 
-      on execution examples.
-    """
-    if not doc: return ""
-    # Capture only the head of the documentation.
-    first_line = doc.split('\n\n')[0].split('\n')[0]
-    
-    # Strip formal parameter definitions.
-    clean = re.sub(r'(:param|:type|:return|:rtype|@param|@return).*', '', first_line)
-    # Strip Python console examples.
-    clean = re.sub(r'>>>.*', '', clean)
-    return clean.strip()
-
-# --- INSPECTION ENGINE ---
-def inspect_temp_content(base_dir, samples=5):
-    """
-    Simulates the vocabulary preparation phase but redirects output to the 
-    standard output (Stdout) instead of the filesystem.
-    """
-    # Glob-based discovery to find compressed training shards.
-    search_pattern = os.path.join(base_dir, "train", "*.jsonl.gz")
-    train_files = glob.glob(search_pattern)
-
-    if not train_files:
-        print(f"ERRORE: Nessun file trovato in {search_pattern}")
-        return
-
-    print(f"Trovati {len(train_files)} file. Analisi del primo file: {os.path.basename(train_files[0])}...\n")
-    print("="*60)
-
-    count = 0
-    
-    # OPEN STREAM: Read the compressed file in 'rt' (Read-Text) mode.
-    # Logic: Efficiently decompress on-the-fly to minimize RAM footprint.
-    with gzip.open(train_files[0], 'rt', encoding='utf-8') as f:
-        for line in f:
-            # Throttle output to the requested sample count.
-            if count >= samples:
-                break
-            
-            try:
-                item = json.loads(line)
-                
-                # SCHEMA ALIGNMENT: Handle potential variations in JSON keys.
-                code = item.get('code', item.get('func_code_string', ''))
-                doc = item.get('docstring', item.get('func_documentation_string', ''))
-                
-                # Apply the same sanitization used in the main pipeline.
-                clean_doc = clean_docstring(doc)
-                
-                # FILTRATION AUDIT:
-                # Simulates the threshold logic: ignore short docstrings or overly complex code.
-                if len(clean_doc) > 10 and len(code.split()) < 200:
-                    count += 1
-                    
-                    # --- OUTPUT SIMULATION ---
-                    # Visually separates the Code (Input) from the Docstring (Ground Truth).
-                    print(f"--- SAMPLE #{count} ---")
-                    print("[CONTENUTO CHE VERREBBE SCRITTO NEL FILE TEMP]:")
-                    print("-" * 20)
-                    print(f"{code}")      # Phase 1: Raw Code block.
-                    print(f"{clean_doc}") # Phase 2: Sanitized documentation string.
-                    print("-" * 20)
-                    print("\n")
-                    
-            except json.JSONDecodeError:
-                continue # Gracefully skip malformed JSON shards.
-
-    print("="*60)
-    print("Ispezione completata.")
-
-# --- EXECUTION GATE ---
-if __name__ == "__main__":
-    # Ensure directory existence before initiating the audit.
-    if os.path.exists(JSONL_BASE_DIR):
-        inspect_temp_content(JSONL_BASE_DIR, NUM_SAMPLES)
-    else:
-        print(f"Attenzione: La cartella '{JSONL_BASE_DIR}' non esiste. Modifica la variabile JSONL_BASE_DIR.")
 
 ================================================================================
 
@@ -11688,7 +11536,7 @@ class BahdanauAttention(nn.Module):
 
         # Scoring Layer: Projecting the combination of Decoder hidden state 
         # and Encoder outputs into a common latent space.
-        self.attn = nn.Linear(hid_dim * 2, hid_dim)
+        self.attn = nn.Linear(hid_dim * 2, hid_dim) # Score = W_a * [s_{t-1}; h_i] + b: Projecting the fused states into a shared latent space.
 
         # Weighting Vector: A learnable parameter that reduces the projection 
         # to a single scalar (energy score) per source token.
@@ -11891,8 +11739,8 @@ class DotProductAttention(nn.Module):
         super().__init__()
         # Linear Projections: Mapping raw hidden states into the specialized 
         # Attention Space (Standard practice in modern Transformer-style attention).
-        self.w_q = nn.Linear(hid_dim, hid_dim)
-        self.w_k = nn.Linear(hid_dim, hid_dim)
+        self.w_q = nn.Linear(hid_dim, hid_dim) #(H,H)
+        self.w_k = nn.Linear(hid_dim, hid_dim) #(H,H)
         
         # Scaling Factor: Used to normalize the Dot Product magnitude. 
         # Prevents vanishing gradients by keeping scores within the Softmax 'sweet spot'.
@@ -11904,14 +11752,18 @@ class DotProductAttention(nn.Module):
             query: Current Decoder state [batch, hid_dim].
             keys: All Encoder outputs [batch, src_len, hid_dim].
         """
+
+        #query:(B,H)
+        #keys:(B,L,H)
+
         # Step 1: Project raw states into the matching Attention Space.
         # q: [batch, 1, hid_dim] | k: [batch, hid_dim, src_len] (transposed for dot product)
-        q = self.w_q(query).unsqueeze(1) 
-        k = self.w_k(keys).transpose(1, 2) 
+        q = self.w_q(query).unsqueeze(1) #(B,H)->(B,1,H)
+        k = self.w_k(keys).transpose(1, 2) #(B,L,H)->(B,H,L)
         
         # Step 2: Scaled Dot Product calculation (BMM = Batch Matrix Multiplication).
         # scores = (Q * K^T) / sqrt(d)
-        scores = torch.bmm(q, k) / self.scale 
+        scores = torch.bmm(q, k) / self.scale #(B,1,L)
         
         # Step 3: Compute Attention Weights (alphas).
         # Softmax over the source sequence length.
@@ -12148,116 +12000,6 @@ class Seq2SeqTransformer(nn.Module):
 
 ================================================================================
 
---- FILE: ValLossChart.py | PATH: Project\scripts\ValLossChart.py ---
----------------------------------------------------------------------
-
-import matplotlib.pyplot as plt
-import re
-import os
-
-# --- CONFIGURATION ---
-LOG_FILENAME = "20260201_210033_LSTM__S50000_B0.00.log"
-
-# The relative path from the project root to the log folder
-LOG_SUBDIR = os.path.join("logs", "Bahdanau")
-
-OUTPUT_DIR_NAME = ""
-# ---------------------
-
-def get_absolute_paths():
-    """
-    Constructs absolute paths dynamically based on the script's location.
-    Assumes the script is located in 'Project/scripts/' and logs are in 'Project/logs/'.
-    """
-    # Get the directory where this script is located (e.g., .../Project/scripts)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Go up one level to reach the project root (e.g., .../Project)
-    project_root = os.path.dirname(script_dir)
-    
-    # Construct the full path to the log file
-    full_log_path = os.path.join(project_root, LOG_SUBDIR, LOG_FILENAME)
-    
-    # Construct the full path for the output directory (inside scripts folder)
-    output_dir = os.path.join(script_dir, OUTPUT_DIR_NAME)
-    
-    return full_log_path, output_dir
-
-def parse_log_and_plot():
-    log_path, output_dir = get_absolute_paths()
-    
-    epochs = []
-    val_losses = []
-
-    print(f"Reading file: {log_path} ...")
-
-    # 1. Read file and extract data
-    try:
-        with open(log_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-            
-        # Regex to find lines like: "Epoch 01 | ... | Val: 7.3937"
-        # Captures the Epoch number (Group 1) and Validation Loss (Group 2)
-        pattern = re.compile(r"Epoch\s+(\d+).*?Val:\s+([\d\.]+)")
-
-        for line in lines:
-            match = pattern.search(line)
-            if match:
-                epoch_num = int(match.group(1))
-                val_loss = float(match.group(2))
-                
-                epochs.append(epoch_num)
-                val_losses.append(val_loss)
-
-    except FileNotFoundError:
-        print(f"ERROR: The file was not found at path: {log_path}")
-        print("Check if the file name is correct and if the folder structure matches.")
-        return
-
-    if not epochs:
-        print("WARNING: No data found. Please check the log file content format.")
-        return
-
-    # 2. Generate the plot
-    plt.figure(figsize=(10, 6))
-    plt.plot(epochs, val_losses, marker='o', linestyle='-', color='#d62728', linewidth=2, label='Validation Loss')
-
-    # Plot styling
-    plt.title(f'Validation Loss Trend\n({LOG_FILENAME})', fontsize=14)
-    plt.xlabel('Epoch', fontsize=12)
-    plt.ylabel('Validation Loss', fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Ensure X-axis shows integer ticks for epochs
-    plt.xticks(epochs) 
-    plt.legend()
-
-    # 3. Save the plot
-    if not os.path.exists(output_dir):
-        try:
-            os.makedirs(output_dir)
-            print(f"Created output directory: {output_dir}")
-        except OSError as e:
-            print(f"Error creating directory: {e}")
-            return
-
-    # Construct output filename based on log filename
-    output_filename = LOG_FILENAME.replace(".log", "_chart.png")
-    output_path = os.path.join(output_dir, output_filename)
-    
-    plt.savefig(output_path)
-    plt.close() # Close the figure to free memory
-
-    print("-" * 30)
-    print(f"Success! Processed {len(epochs)} epochs.")
-    print(f"Chart saved at: {output_path}")
-    print("-" * 30)
-
-if __name__ == "__main__":
-    parse_log_and_plot()
-
-================================================================================
-
 --- FILE: compare_models.py | PATH: Project\scripts\compare_models.py ---
 -------------------------------------------------------------------------
 
@@ -12332,6 +12074,11 @@ def compare_models():
             plt.plot(epochs, losses, marker='o', markersize=4, linestyle='-', 
                      linewidth=2, label=model_name, color=colors.get(model_name, "black"))
             
+            # Highlighting the best epoch
+            min_loss = min(losses)
+            best_epoch = epochs[losses.index(min_loss)]
+            plt.scatter(best_epoch, min_loss, s=60, edgecolors='black', zorder=10)
+
             # Collecting stats for print summary
             min_loss = min(losses)
             final_epoch = epochs[-1]
@@ -12340,6 +12087,9 @@ def compare_models():
             print(f"{model_name:<20} | {min_loss:.4f}          | {final_epoch}")
         else:
             print(f"{model_name:<20} | NO DATA FOUND")
+
+    # X-axis ticks
+    plt.xticks(epochs)
 
     # Chart Styling
     plt.title('Model Comparison: Subset 20k (Validation Loss)', fontsize=16)
@@ -12655,7 +12405,8 @@ def plot_linguistic_metrics(df):
     metrics = [('bleu', 'BLEU Score'), ('rougeL', 'ROUGE-L Score'), ('loss', 'Final Val Loss'), ('perplexity', 'Perplexity')]
     models = df['model'].unique(); subsets = sorted(df['subset_size'].unique())
     colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(subsets)))
-    x = np.arange(len(models)); w = 0.8 / len(subsets)
+    x = np.arange(len(models)); 
+    w = 0.8 / len(subsets)
 
     for idx, (col, title) in enumerate(metrics):
         ax = axes[idx//2, idx%2]
@@ -12666,7 +12417,9 @@ def plot_linguistic_metrics(df):
             ax.bar(x + (i - len(subsets)/2)*w + w/2, vals, w, color=colors[i], label=f"Size: {s}" if idx==0 else "", edgecolor='white', alpha=0.9)
 
         ax.set_title(title, fontweight='bold', pad=10)
-        ax.set_xticks(x); ax.set_xticklabels(models); ax.grid(axis='y', linestyle='--', alpha=0.4)
+        ax.set_xticks(x); 
+        ax.set_xticklabels(models); 
+        ax.grid(axis='y', linestyle='--', alpha=0.4)
 
     fig.legend(*(axes[0,0].get_legend_handles_labels()), loc='upper center', ncol=len(subsets), bbox_to_anchor=(0.5, 0.97), frameon=False)
 
@@ -12694,53 +12447,13 @@ def plot_temporal_efficiency(df):
             ax.bar(x + (i - len(subsets)/2)*w + w/2, vals, w, color=colors[i], edgecolor='white')
 
         ax.set_title(title, fontweight='bold', pad=15)
-        ax.set_xticks(x); ax.set_xticklabels(models, rotation=90); ax.grid(axis='y', linestyle='--', alpha=0.3)
+        ax.set_xticks(x)
+        ax.set_xticklabels(models, rotation=90)
+        ax.grid(axis='y', linestyle='--', alpha=0.3)
 
     plt.subplots_adjust(wspace=0.35, bottom=0.2)
-    plt.savefig(os.path.join(SCRIPT_DIR, "temporal_efficiency.png"), dpi=300); plt.show()
-
-def plot_3d_intersecting_planes(df):
-    """Section 3: High-Visibility 3D Planes (Time-Loss-ROUGE)."""
-    fig = plt.figure(figsize=(14, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    
-    models = df['model'].unique()
-    # Distinct palettes for surfaces
-    cmaps = ['Blues', 'Oranges', 'Greens', 'Reds']
-    
-    for i, model in enumerate(models):
-        d = df[df['model'] == model]
-        if len(d) < 3: continue # Need at least 3 points for a plane
-        
-        # Data extraction
-        x = d['Media Epoca (s)'].values
-        y = d['loss'].values
-        z = d['rougeL'].values
-        
-        # Grid creation for surface interpolation
-        xi = np.linspace(x.min(), x.max(), 20)
-        yi = np.linspace(y.min(), y.max(), 20)
-        XI, YI = np.meshgrid(xi, yi)
-        ZI = griddata((x, y), z, (XI, YI), method='linear')
-        
-        # Plot Surface
-        surf = ax.plot_surface(XI, YI, ZI, cmap=cmaps[i % len(cmaps)], alpha=0.6, edgecolor='none', label=model)
-        # Add original scatter points for grounding
-        ax.scatter(x, y, z, s=60, edgecolors='black', alpha=1.0)
-
-    ax.set_title("3D Efficiency Planes: Time vs. Loss vs. ROUGE-L", pad=30, fontweight='bold')
-    ax.set_xlabel("Epoch Time (s)", labelpad=15)
-    ax.set_ylabel("Validation Loss", labelpad=15)
-    ax.set_zlabel("ROUGE-L Score", labelpad=15)
-    
-    # Custom legend for surfaces (Matplotlib fix)
-    from matplotlib.lines import Line2D
-    custom_lines = [Line2D([0], [0], color=plt.get_cmap(cmaps[i])(0.5), lw=4) for i in range(len(models))]
-    ax.legend(custom_lines, models, loc='upper left', bbox_to_anchor=(0.1, 0.9))
-
-    ax.view_init(elev=25, azim=-45) # Optimal angle for intersection visibility
-    plt.tight_layout()
-    plt.savefig(os.path.join(SCRIPT_DIR, "3d_efficiency_planes.png"), dpi=300); plt.show()
+    plt.savefig(os.path.join(SCRIPT_DIR, "temporal_efficiency.png"), dpi=300); 
+    plt.show()
 
 # --- [MAIN EXECUTION] ---
 
