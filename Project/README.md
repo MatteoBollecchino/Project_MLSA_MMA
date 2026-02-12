@@ -23,13 +23,13 @@ The code is organized into the following main directories and files:
     - `tokenizer.py`: Construction and management of the BPE vocabulary.
 - `Datasets/`: Default directory for storing raw and processed dataset.
 - `logs/`: Directory where execution logs and training metrics are saved.
-- `models/`: Contains neural architecture definitions (e.g., Transformer, LSTM).
+- `models/`: Contains neural architecture definitions (e.g., Transformer, Encoder-Decoder with LSTM).
 - `scripts/`: Utility scripts and training logic (`train.py`, `log_manager.py`).
 
 - `colab_remote_exec.txt`: Script to be executed in Colab environment to train and evaluate a model
-- `evaluate.py`: Script dedicated to checkpoint evaluation, calculating metrics such as BLEU and ROUGE, and     managing "Audit Mode".
+- `evaluate.py`: Script dedicated to checkpoint evaluation, calculating metrics such as BLEU and ROUGE, and managing "Audit Mode".
 - `requirements.txt`: List of requirements needed to run the code
-- `test_audit.py`:
+- `test_audit.py`: Model assessment via Beam Search and Suite Testing.
 - `tokenizer.json`: Contains the BPE Tokenizer (general info, vocabulary and merges)
 
 ---
