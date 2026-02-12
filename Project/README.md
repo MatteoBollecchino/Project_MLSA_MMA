@@ -28,7 +28,7 @@ The code is organized into the following main directories and files:
 
 - `colab_remote_exec.txt`: Script to be executed in Colab environment to train and evaluate a model
 - `evaluate.py`: Script dedicated to checkpoint evaluation, calculating metrics such as BLEU and ROUGE, and     managing "Audit Mode".
-- `requierements.txt`: List of requierements needed to run the code
+- `requirements.txt`: List of requirements needed to run the code
 - `test_audit.py`:
 - `tokenizer.json`: Contains the BPE Tokenizer (general info, vocabulary and merges)
 

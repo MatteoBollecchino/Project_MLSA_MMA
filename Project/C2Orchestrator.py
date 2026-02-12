@@ -26,7 +26,7 @@ from tokenizers import Tokenizer
 # --- [GLOBAL CONFIGURATION] ---
 # Tracking logic evolution. 4.4.0 introduces Internal Target Shifting 
 # and differentiated regularization (Dropout/Weight Decay) for Transformers.
-PIPELINE_VERSION = "4.4.18 - Opportunity" 
+PIPELINE_VERSION = "4.4.19 - Opportunity" 
 AUTHORS = "Matteo Bollecchino, Marco Pietri, Alessandro Nesti."
 
 # --- [DOMAIN ISOLATION: MODULE IMPORTS] ---
@@ -71,7 +71,7 @@ class CodeSummarizationPipeline:
 
         print(f"\n" + "="*120)
         print(f"CODE SUMMARIZATION PROJECT | Version: {PIPELINE_VERSION} | Authors: {AUTHORS}")
-        print(f"powered by PyTorch {torch.__version__} |  C2 Orchestrator Initialized")
+        print(f"powered by PyTorch {torch.__version__} | C2 Orchestrator Initialized")
         print(f"Vaswani: 'Attention Is All You Need'. NVIDIA: 'Hold my beer...'")
         print(f"Session Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*120)

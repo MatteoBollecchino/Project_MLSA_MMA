@@ -60,7 +60,6 @@ def get_model_architecture(model_type, device, vocab_size=20000):
     # --- [PHASE 3] LOGICAL BRANCHING & INSTANTIATION ---
 
     # ARCHITECTURE A: LSTM + BAHDANAU ATTENTION
-    # Uses a neural network layer to learn alignments (Additive Attention).
     if model_type == "lstm_bahdanau":
         logger.info(f"Factory: Generating LSTM + Bahdanau (Conservative Dropout: {lstm_params['dropout']})")
         return Seq2SeqBahdanau(
@@ -73,7 +72,6 @@ def get_model_architecture(model_type, device, vocab_size=20000):
         ).to(device) # Immediate hardware mapping.
 
     # ARCHITECTURE B: LSTM + DOTPRODUCT ATTENTION
-    # Scaled Dot-Product alignment mechanism (Geometric/Multiplicative Attention).
     elif model_type == "lstm_dotproduct":
         logger.info(f"Factory: Generating LSTM + DotProduct (Conservative Dropout: {lstm_params['dropout']})")
         return Seq2SeqDotProduct(
@@ -86,7 +84,6 @@ def get_model_architecture(model_type, device, vocab_size=20000):
         ).to(device)
 
     # ARCHITECTURE C: TRANSFORMER (Attention Is All You Need)
-    # The parallel titan. Requires strict regularization to converge on code logic.
     elif model_type == "transformer":
         logger.info(f"Factory: Generating Transformer (Aggressive Dropout: {trans_params['dropout']})")
         return Seq2SeqTransformer(
