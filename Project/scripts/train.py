@@ -6,7 +6,7 @@ ROLE: Core Optimization Loop and Gradient Descent Orchestrator.
 
 DESIGN PRINCIPLES:
 - Numerical Stability: Implements Gradient Clipping and Label Smoothing.
-- Hardware Acceleration: Fully integrated with Mixed Precision (FP16/BF16).
+- Hardware Acceleration: Fully integrated with Mixed Precision.
 - Adaptive Regularization: Hyperparameters scale based on the model phenotype 
   (Transformer vs. LSTM) to combat Overfitting vs. Underfitting.
 ================================================================================
@@ -81,6 +81,8 @@ def train_model(model, train_loader, valid_loader, config, device, telemetry=Non
     # --- [PHASE 2] CORE TRAINING LOOP ---
     # SCALER: Manages precision scaling for FP16 training to prevent underflow.
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
+
+    # Initialize the best validation loss to infinity for early stopping.
     best_valid_loss = float('inf')
 
     for epoch in range(config.epochs):
@@ -160,6 +162,7 @@ def evaluate_validation(model, loader, criterion, device):
             src, trg = src.to(device), trg.to(device)
             with torch.amp.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
                 # Model predicts autoregressively based on context.
+                # output shape: [Batch, Seq, Vocab].
                 output = model(src, trg, teacher_forcing_ratio=0)
                 output_dim = output.shape[-1]
                 # Compare predicted tokens with actual ground truth.

@@ -31,6 +31,8 @@ from models.factory import get_model_architecture
 
 def clean_output(text):
     """ Post-processing to normalize BPE spacing artifacts. """
+
+    # Clean up BPE artifacts: Replace 'Ġ' with space and collapse multiple spaces.
     return text.replace('Ġ', ' ').replace('  ', ' ').strip()
 
 def beam_search_decode(model, src_tensor, tokenizer, model_tag, beam_width=5, max_len=40, device="cpu", penalty=1.2):
@@ -44,54 +46,80 @@ def beam_search_decode(model, src_tensor, tokenizer, model_tag, beam_width=5, ma
     pad_id = tokenizer.token_to_id("<PAD>")
     
     if "lstm" in model_tag:
+        # For LSTM-based models, we need to manage hidden states across beam expansions.
         with torch.no_grad():
+            # Encode the source sequence once to reuse across beam expansions.
             encoder_outputs, hidden, cell = model.encoder(src_tensor)
+        
+        # Initialize beams with the start token and initial hidden states.
         beams = [([sos_id], 0.0, hidden, cell)]
     else:
+        # For Transformer, we can encode once and reuse encoder outputs.
         beams = [([sos_id], 0.0)]
         encoder_outputs = None
 
+    # Iteratively expand beams until max length or all beams end with EOS.
     with torch.no_grad():
         for _ in range(max_len):
             all_candidates = []
             for b in beams:
                 if "lstm" in model_tag:
+                    # Unpack sequence, score, and hidden states for LSTM-based models.
                     seq, score, h, c = b
                 else:
+                    # Unpack sequence and score for Transformer-based models.
                     seq, score = b
                 
+                # If the last token is EOS, we don't expand this beam further.
                 if seq[-1] == eos_id:
                     all_candidates.append(b)
                     continue
                 
                 if "lstm" in model_tag:
+                    # For LSTM, we need to pass the last token and hidden states to get the next output.
                     input_token = torch.LongTensor([seq[-1]]).to(device)
+                    # output: [1, Vocab] for the next token probabilities.
                     output, next_h, next_c = model.decoder(input_token, h, c, encoder_outputs)
                 else:
+                    # For Transformer, we pass the entire sequence to get the next token probabilities.
                     input_tensor = torch.LongTensor([seq]).to(device)
+                    # output: [1, Seq, Vocab], we take the last token's output for prediction.
                     output = model(src_tensor, input_tensor)[:, -1, :] 
                 
+                # Apply log softmax to get log probabilities for the next token.
+                # log_probs -> we squeeze to remove batch dimension.
                 log_probs = F.log_softmax(output, dim=-1).squeeze(0)
                 
                 # Apply repetition penalty to existing tokens in sequence.
                 for idx in set(seq):
+                    # Only apply penalty to non-special tokens to encourage diversity.
                     if idx not in [sos_id, eos_id, pad_id]:
+                        # Penalize tokens that have already been generated in this beam to reduce repetition.
                         log_probs[idx] -= penalty
                 
+                # Get top K candidates from the log probabilities for the next token.
                 top_log_probs, top_indices = log_probs.topk(beam_width)
+
+                # Expand each candidate and add to the list of all candidates.
                 for i in range(beam_width):
+                    # Calculate the new score by adding the log probability of the next token to the existing score.
                     next_token = top_indices[i].item()
                     new_score = score + top_log_probs[i].item()
                     if "lstm" in model_tag:
+                        # For LSTM, we need to carry forward the hidden states for each candidate beam.
                         all_candidates.append((seq + [next_token], new_score, next_h, next_c))
                     else:
+                        # For Transformer, we only need to carry forward the sequence and score.
                         all_candidates.append((seq + [next_token], new_score))
             
             # Global pruning: keep top K candidates.
             beams = sorted(all_candidates, key=lambda x: x[1], reverse=True)[:beam_width]
+
+            # If all beams have ended with EOS, we can stop early.
             if all(b[0][-1] == eos_id for b in beams):
                 break
-                
+
+    # Return the sequence from the best beam (highest score) after removing special tokens.           
     return beams[0][0]
 
 def load_samples(data_dir, split, num_samples=10):
@@ -139,6 +167,7 @@ def run_deep_audit():
         ]
     }
 
+    # Gather all checkpoint files for analysis.
     checkpoints = sorted([f for f in os.listdir(checkpoint_dir) if f.endswith(".pt")])
     
     with open(log_file, "w", encoding="utf-8") as log:
@@ -159,6 +188,7 @@ def run_deep_audit():
             try:
                 # Factory synthesis and state loading.
                 model = get_model_architecture(model_tag, device, vocab_size=vocab_size)
+                # Load the checkpoint state dict.
                 model.load_state_dict(torch.load(os.path.join(checkpoint_dir, ckpt), map_location=device))
                 model.eval()
 
@@ -168,7 +198,11 @@ def run_deep_audit():
                     
                     for i, s in enumerate(samples):
                         # Tokenization and hardware mapping.
+
+                        # ids_input contains the token IDs for the input code snippet, which is then wrapped with <SOS> and <EOS> tokens and converted to a tensor for model input.
                         ids_input = tokenizer.encode(s['code']).ids
+                        
+                        # src_tensor shape: [1, Seq] where Seq is the length of the tokenized input sequence including special tokens.
                         src_tensor = torch.LongTensor([1] + ids_input + [2]).unsqueeze(0).to(device)
                         
                         # Sequence decoding.
@@ -186,5 +220,6 @@ def run_deep_audit():
 
     print(f"\nAudit complete. Quantitative and qualitative report finalized at: {log_file}")
 
+# --- STANDALONE EXECUTION BLOCK ---
 if __name__ == "__main__":
     run_deep_audit()

@@ -31,8 +31,13 @@ class PositionalEncoding(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
         # Pre-compute the positional encoding matrix in log space for efficiency.
+        # pe: [max_len, d_model] tensor where each position has a unique encoding.
         pe = torch.zeros(max_len, d_model)
+
+        # position: [max_len, 1] tensor of position indices.
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+
+        # div_term: [d_model/2] tensor of frequencies for sine and cosine functions.
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         
         # Apply sine to even indices and cosine to odd indices.
@@ -46,7 +51,10 @@ class PositionalEncoding(nn.Module):
         """
         Fuses the token embeddings with the spatial signal.
         """
+        # x: [batch_size, seq_len, d_model] tensor of token embeddings.
         x = x + self.pe[:, :x.size(1)]
+
+        # The dropout here serves as a regularization mechanism to prevent overfitting.
         return self.dropout(x)
 
 class Seq2SeqTransformer(nn.Module):
@@ -68,9 +76,12 @@ class Seq2SeqTransformer(nn.Module):
         # CORE TRANSFORMER: Built-in PyTorch implementation for optimized kernel execution.
         # batch_first=True is used to maintain consistency with the C2 dataset pipeline.
         self.transformer = nn.Transformer(
-            d_model=d_model, nhead=nhead, 
-            num_encoder_layers=num_layers, num_decoder_layers=num_layers, 
-            dim_feedforward=dim_feedforward, dropout=dropout, 
+            d_model=d_model, 
+            nhead=nhead, 
+            num_encoder_layers=num_layers, 
+            num_decoder_layers=num_layers, 
+            dim_feedforward=dim_feedforward, 
+            dropout=dropout, 
             batch_first=True 
         )
         
@@ -82,6 +93,9 @@ class Seq2SeqTransformer(nn.Module):
         CAUSALITY SHIELD: Creates an upper-triangular matrix to prevent 'Peeking'.
         Ensures position 'i' can only attend to positions '<= i'.
         """
+        # sz = sequence length. 
+        # The mask will have True values above the diagonal, which will be ignored by the attention mechanism.
+        # The mask is a boolean tensor where True values indicate positions that should be masked (i.e., not attended to).
         return torch.triu(torch.ones(sz, sz, device=device), diagonal=1).bool()
 
     def forward(self, src, trg, **kwargs):
@@ -103,7 +117,7 @@ class Seq2SeqTransformer(nn.Module):
             # SHIFT LOGIC: Use tokens [0 to T-1] to predict [1 to T].
             trg_input = trg[:, :-1]
         else:
-            # INFERENCE LOGIC: Use the provided sequence as-is (e.g., during Beam Search).
+            # INFERENCE LOGIC: Use the provided sequence as it is (e.g., during Beam Search).
             trg_input = trg
         
         # --- PHASE 2: ATTENTION MASKING ---
@@ -122,7 +136,8 @@ class Seq2SeqTransformer(nn.Module):
         # CORE EXECUTION:
         # memory_key_padding_mask ensures encoder padding does not distract the decoder.
         output = self.transformer(
-            src_emb, tgt_emb, tgt_mask=tgt_mask,
+            src_emb, tgt_emb, 
+            tgt_mask=tgt_mask,
             src_key_padding_mask=src_key_padding_mask,
             tgt_key_padding_mask=tgt_key_padding_mask,
             memory_key_padding_mask=src_key_padding_mask 
